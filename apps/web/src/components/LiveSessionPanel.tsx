@@ -1,31 +1,47 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createAudioRecorder, type AudioRecorder } from "@/lib/audioRecorder";
 import {
   computeNextState,
   createInitialSessionModel,
-  SessionModel,
+  type SessionModel,
 } from "@/lib/sessionState";
 
 export default function LiveSessionPanel() {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
   const [isRecording, setIsRecording] = useState(false);
+  const [totalBytes, setTotalBytes] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<AudioRecorder | null>(null);
+
+  useEffect(() => {
+    return () => {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      micStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recorderRef.current?.stop();
+    };
+  }, []);
 
   async function requestMicrophone() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
 
+      recorderRef.current = createAudioRecorder(stream, (chunk) => {
+        setTotalBytes((previousBytes) => previousBytes + chunk.byteLength);
+      });
+
       setModel((prev) => {
         const next = { ...prev, micGranted: true, error: undefined };
         return { ...next, state: computeNextState(next) };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Mic permission failed";
+      const message =
+        error instanceof Error ? error.message : "Mic permission failed";
       setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
     }
   }
@@ -44,38 +60,62 @@ export default function LiveSessionPanel() {
         return { ...next, state: computeNextState(next) };
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Camera permission failed";
+      const message =
+        error instanceof Error ? error.message : "Camera permission failed";
       setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
     }
   }
 
   function stopAllStreams() {
-    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recorderRef.current?.stop();
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+
     cameraStreamRef.current = null;
     micStreamRef.current = null;
+    recorderRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
     setIsRecording(false);
+    setTotalBytes(0);
     setModel(createInitialSessionModel());
   }
 
-  function startRecording() {
-    if (!micStreamRef.current) return;
-    setIsRecording(true);
-    setModel((prev) => ({ ...prev, state: "RECORDING" }));
+  async function startRecording() {
+    if (!recorderRef.current) {
+      return;
+    }
+
+    try {
+      await recorderRef.current.start();
+      setIsRecording(true);
+      setModel((prev) => ({ ...prev, state: "RECORDING" }));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Recording failed to start";
+      setIsRecording(false);
+      setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+    }
   }
 
   function stopRecording() {
+    recorderRef.current?.stop();
     setIsRecording(false);
+
     setModel((prev) => {
-      const next = { ...prev };
+      const next = { ...prev, error: undefined };
       return { ...next, state: computeNextState(next) };
     });
   }
 
-  const stateLabel = (() => {
-    if (model.error) return `ERROR: ${model.error.message}`;
-    return model.state;
-  })();
+  const stateLabel = model.error
+    ? `ERROR: ${model.error.message}`
+    : model.state;
+
+  const capturedKilobytes = (totalBytes / 1024).toFixed(1);
 
   return (
     <div className="rounded-xl border p-4">
@@ -117,9 +157,7 @@ export default function LiveSessionPanel() {
           muted
           className="aspect-video w-full rounded-lg border"
         />
-        <div className="mt-2 text-xs text-gray-500">
-          Camera preview (local).
-        </div>
+        <div className="mt-2 text-xs text-gray-500">Camera preview (local).</div>
       </div>
 
       <div className="mt-4">
@@ -128,6 +166,7 @@ export default function LiveSessionPanel() {
           disabled={!model.micGranted}
           onMouseDown={startRecording}
           onMouseUp={stopRecording}
+          onMouseLeave={stopRecording}
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
         >
@@ -135,7 +174,10 @@ export default function LiveSessionPanel() {
         </button>
 
         <div className="mt-2 text-xs text-gray-500">
-          This is local-only for now. Next step: stream audio/video to backend.
+          Local audio capture only for now.
+        </div>
+        <div className="mt-1 text-xs text-gray-500">
+          Captured audio: {capturedKilobytes} KB
         </div>
       </div>
     </div>
