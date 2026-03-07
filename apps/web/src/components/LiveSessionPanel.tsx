@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { createAudioRecorder, type AudioRecorder } from "@/lib/audioRecorder";
 import {
+  createLiveSocketClient,
+  type LiveSocketClient,
+  type LiveSocketMessage,
+  type LiveSocketStatus,
+} from "@/lib/liveSocket";
+import {
   computeNextState,
   createInitialSessionModel,
   type SessionModel,
@@ -12,17 +18,43 @@ export default function LiveSessionPanel() {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
   const [isRecording, setIsRecording] = useState(false);
   const [totalBytes, setTotalBytes] = useState(0);
+  const [socketStatus, setSocketStatus] =
+    useState<LiveSocketStatus>("DISCONNECTED");
+  const [socketMessage, setSocketMessage] = useState("No messages yet");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
+  const socketRef = useRef<LiveSocketClient | null>(null);
 
   useEffect(() => {
+    const socketUrl =
+      process.env.NEXT_PUBLIC_BACKEND_WS_URL ?? "ws://localhost:8000/ws/live";
+
+    socketRef.current = createLiveSocketClient({
+      socketUrl,
+      onStatusChange: (status) => setSocketStatus(status),
+      onMessage: (message: LiveSocketMessage) => {
+        if (message.type === "audio_ack") {
+          setSocketMessage(
+            `Received ack: chunk=${message.chunk_size} total=${message.total_bytes_received}`
+          );
+        } else {
+          setSocketMessage(`Received text ack: ${message.message}`);
+        }
+      },
+      onError: (message) => {
+        setSocketMessage(message);
+        setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+      },
+    });
+
     return () => {
       cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       micStreamRef.current?.getTracks().forEach((track) => track.stop());
       recorderRef.current?.stop();
+      socketRef.current?.disconnect();
     };
   }, []);
 
@@ -33,6 +65,7 @@ export default function LiveSessionPanel() {
 
       recorderRef.current = createAudioRecorder(stream, (chunk) => {
         setTotalBytes((previousBytes) => previousBytes + chunk.byteLength);
+        socketRef.current?.sendAudioChunk(chunk);
       });
 
       setModel((prev) => {
@@ -68,6 +101,8 @@ export default function LiveSessionPanel() {
 
   function stopAllStreams() {
     recorderRef.current?.stop();
+    socketRef.current?.disconnect();
+
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
 
@@ -81,7 +116,17 @@ export default function LiveSessionPanel() {
 
     setIsRecording(false);
     setTotalBytes(0);
+    setSocketStatus("DISCONNECTED");
+    setSocketMessage("No messages yet");
     setModel(createInitialSessionModel());
+  }
+
+  function connectSocket() {
+    socketRef.current?.connect();
+  }
+
+  function disconnectSocket() {
+    socketRef.current?.disconnect();
   }
 
   async function startRecording() {
@@ -120,9 +165,16 @@ export default function LiveSessionPanel() {
   return (
     <div className="rounded-xl border p-4">
       <div className="text-sm font-semibold">Live Session</div>
+
       <div className="mt-2 text-sm">
         <span className="font-medium">State:</span> {stateLabel}
       </div>
+
+      <div className="mt-1 text-sm">
+        <span className="font-medium">Socket:</span> {socketStatus}
+      </div>
+
+      <div className="mt-1 text-xs text-gray-500">{socketMessage}</div>
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button
@@ -139,6 +191,20 @@ export default function LiveSessionPanel() {
           disabled={model.cameraGranted}
         >
           {model.cameraGranted ? "Camera Granted" : "Enable Camera"}
+        </button>
+
+        <button
+          className="rounded-lg border px-3 py-2 text-sm"
+          onClick={connectSocket}
+        >
+          Connect Socket
+        </button>
+
+        <button
+          className="rounded-lg border px-3 py-2 text-sm"
+          onClick={disconnectSocket}
+        >
+          Disconnect Socket
         </button>
 
         <button
@@ -163,7 +229,7 @@ export default function LiveSessionPanel() {
       <div className="mt-4">
         <button
           className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-          disabled={!model.micGranted}
+          disabled={!model.micGranted || socketStatus !== "CONNECTED"}
           onMouseDown={startRecording}
           onMouseUp={stopRecording}
           onMouseLeave={stopRecording}
@@ -174,7 +240,7 @@ export default function LiveSessionPanel() {
         </button>
 
         <div className="mt-2 text-xs text-gray-500">
-          Local audio capture only for now.
+          Audio chunks are now sent to the backend websocket.
         </div>
         <div className="mt-1 text-xs text-gray-500">
           Captured audio: {capturedKilobytes} KB
