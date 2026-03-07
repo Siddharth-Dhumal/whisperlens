@@ -1,5 +1,11 @@
-from fastapi import FastAPI, WebSocket
+import logging
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.gemini_live import GeminiLiveSession
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="WhisperLens Backend", version="0.1.0")
 
@@ -20,42 +26,55 @@ def health_check() -> dict:
 @app.websocket("/ws/live")
 async def live_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
-    total_bytes_received = 0
 
-    while True:
-        message = await websocket.receive()
-        message_type = message["type"]
+    gemini = GeminiLiveSession()
 
-        if message_type == "websocket.disconnect":
-            print("[ws/live] client disconnected")
-            break
+    try:
+        await gemini.connect()
+        logger.info("[ws/live] Gemini Live session connected")
 
-        if message_type == "websocket.receive":
-            if message.get("bytes") is not None:
-                chunk = message["bytes"]
-                total_bytes_received += len(chunk)
+        while True:
+            message = await websocket.receive()
+            message_type = message["type"]
 
-                print(
-                    f"[ws/live] received audio chunk: "
-                    f"{len(chunk)} bytes "
-                    f"(total={total_bytes_received})"
-                )
+            if message_type == "websocket.disconnect":
+                logger.info("[ws/live] client disconnected")
+                break
 
-                await websocket.send_json(
-                    {
-                        "type": "audio_ack",
-                        "chunk_size": len(chunk),
-                        "total_bytes_received": total_bytes_received,
-                    }
-                )
+            if message_type == "websocket.receive":
+                text = message.get("text")
 
-            elif message.get("text") is not None:
-                text_message = message["text"]
-                print(f"[ws/live] received text message: {text_message}")
+                if text is not None:
+                    logger.info("[ws/live] received text: %s", text[:80])
 
-                await websocket.send_json(
-                    {
-                        "type": "text_ack",
-                        "message": text_message,
-                    }
-                )
+                    await gemini.send_text(text)
+
+                    full_response = ""
+                    async for chunk in gemini.receive_text():
+                        full_response += chunk
+                        await websocket.send_json(
+                            {
+                                "type": "transcript",
+                                "text": chunk,
+                            }
+                        )
+
+                    await websocket.send_json(
+                        {
+                            "type": "turn_complete",
+                            "text": full_response,
+                        }
+                    )
+
+    except WebSocketDisconnect:
+        logger.info("[ws/live] client disconnected (exception)")
+    except Exception:
+        logger.exception("[ws/live] unexpected error")
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": "Internal server error"}
+            )
+        except Exception:
+            pass
+    finally:
+        await gemini.close()
