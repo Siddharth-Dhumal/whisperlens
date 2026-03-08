@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.gemini_live import GeminiLiveSession
+from app.ollama_live import OllamaError, OllamaSession
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,11 @@ def health_check() -> dict:
 async def live_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
-    gemini = GeminiLiveSession()
+    session = OllamaSession()
 
     try:
-        await gemini.connect()
-        logger.info("[ws/live] Gemini Live session connected")
+        await session.connect()
+        logger.info("[ws/live] Ollama session connected")
 
         while True:
             message = await websocket.receive()
@@ -47,10 +47,10 @@ async def live_websocket(websocket: WebSocket) -> None:
                 if text is not None:
                     logger.info("[ws/live] received text: %s", text[:80])
 
-                    await gemini.send_text(text)
+                    await session.send_text(text)
 
                     full_response = ""
-                    async for chunk in gemini.receive_text():
+                    async for chunk in session.receive_text():
                         full_response += chunk
                         await websocket.send_json(
                             {
@@ -68,6 +68,14 @@ async def live_websocket(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         logger.info("[ws/live] client disconnected (exception)")
+    except OllamaError as exc:
+        logger.error("[ws/live] Ollama error: %s", exc)
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": str(exc)}
+            )
+        except Exception:
+            pass
     except Exception:
         logger.exception("[ws/live] unexpected error")
         try:
@@ -77,4 +85,4 @@ async def live_websocket(websocket: WebSocket) -> None:
         except Exception:
             pass
     finally:
-        await gemini.close()
+        await session.close()

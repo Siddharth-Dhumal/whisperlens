@@ -18,10 +18,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    google_cloud_project: str = ""
-    google_cloud_location: str = "global"
-    google_genai_use_vertexai: bool = True
-    gemini_live_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
 
 
 @lru_cache
