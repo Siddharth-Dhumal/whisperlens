@@ -5,15 +5,9 @@ export type LiveSocketStatus =
     | "ERROR";
 
 export type LiveSocketMessage =
-    | {
-        type: "audio_ack";
-        chunk_size: number;
-        total_bytes_received: number;
-    }
-    | {
-        type: "text_ack";
-        message: string;
-    };
+    | { type: "transcript"; text: string }
+    | { type: "turn_complete"; text: string }
+    | { type: "error"; message: string };
 
 export type LiveSocketClient = {
     connect: () => void;

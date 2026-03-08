@@ -14,19 +14,35 @@ import {
   type SessionModel,
 } from "@/lib/sessionState";
 
+type ChatEntry = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 export default function LiveSessionPanel() {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
   const [isRecording, setIsRecording] = useState(false);
   const [totalBytes, setTotalBytes] = useState(0);
   const [socketStatus, setSocketStatus] =
     useState<LiveSocketStatus>("DISCONNECTED");
-  const [socketMessage, setSocketMessage] = useState("No messages yet");
+
+  // Chat state
+  const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
+  const [streamingText, setStreamingText] = useState("");
+  const [textInput, setTextInput] = useState("");
+  const [isSending, setIsSending] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
   const socketRef = useRef<LiveSocketClient | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
+  }, [chatHistory, streamingText]);
 
   useEffect(() => {
     const socketUrl =
@@ -36,17 +52,28 @@ export default function LiveSessionPanel() {
       socketUrl,
       onStatusChange: (status) => setSocketStatus(status),
       onMessage: (message: LiveSocketMessage) => {
-        if (message.type === "audio_ack") {
-          setSocketMessage(
-            `Received ack: chunk=${message.chunk_size} total=${message.total_bytes_received}`
-          );
-        } else {
-          setSocketMessage(`Received text ack: ${message.message}`);
+        if (message.type === "transcript") {
+          setStreamingText((prev) => prev + message.text);
+        } else if (message.type === "turn_complete") {
+          setChatHistory((prev) => [
+            ...prev,
+            { role: "assistant", text: message.text },
+          ]);
+          setStreamingText("");
+          setIsSending(false);
+        } else if (message.type === "error") {
+          setModel((prev) => ({
+            ...prev,
+            error: { message: message.message },
+            state: "ERROR",
+          }));
+          setStreamingText("");
+          setIsSending(false);
         }
       },
       onError: (message) => {
-        setSocketMessage(message);
         setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+        setIsSending(false);
       },
     });
 
@@ -117,7 +144,10 @@ export default function LiveSessionPanel() {
     setIsRecording(false);
     setTotalBytes(0);
     setSocketStatus("DISCONNECTED");
-    setSocketMessage("No messages yet");
+    setChatHistory([]);
+    setStreamingText("");
+    setTextInput("");
+    setIsSending(false);
     setModel(createInitialSessionModel());
   }
 
@@ -156,6 +186,23 @@ export default function LiveSessionPanel() {
     });
   }
 
+  function handleSendText() {
+    const trimmed = textInput.trim();
+    if (!trimmed || socketStatus !== "CONNECTED") return;
+
+    setChatHistory((prev) => [...prev, { role: "user", text: trimmed }]);
+    socketRef.current?.sendTextMessage(trimmed);
+    setTextInput("");
+    setIsSending(true);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendText();
+    }
+  }
+
   const stateLabel = model.error
     ? `ERROR: ${model.error.message}`
     : model.state;
@@ -173,8 +220,6 @@ export default function LiveSessionPanel() {
       <div className="mt-1 text-sm">
         <span className="font-medium">Socket:</span> {socketStatus}
       </div>
-
-      <div className="mt-1 text-xs text-gray-500">{socketMessage}</div>
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button
@@ -245,6 +290,59 @@ export default function LiveSessionPanel() {
         <div className="mt-1 text-xs text-gray-500">
           Captured audio: {capturedKilobytes} KB
         </div>
+      </div>
+
+      {/* Chat transcript */}
+      <div className="mt-4">
+        <div className="text-sm font-semibold">Chat</div>
+        <div
+          data-testid="chat-log"
+          className="mt-2 max-h-60 overflow-y-auto rounded-lg border p-3 text-sm"
+        >
+          {chatHistory.length === 0 && !streamingText && (
+            <div className="text-gray-400">
+              No messages yet. Connect the socket and send a message below.
+            </div>
+          )}
+          {chatHistory.map((entry, i) => (
+            <div key={i} className={`mb-2 ${entry.role === "user" ? "text-blue-600" : "text-gray-800"}`}>
+              <span className="font-medium">
+                {entry.role === "user" ? "You: " : "AI: "}
+              </span>
+              {entry.text}
+            </div>
+          ))}
+          {streamingText && (
+            <div data-testid="streaming-text" className="mb-2 text-gray-800">
+              <span className="font-medium">AI: </span>
+              {streamingText}
+              <span className="animate-pulse">▊</span>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+      </div>
+
+      {/* Debug text input */}
+      <div className="mt-3 flex gap-2">
+        <input
+          data-testid="text-input"
+          type="text"
+          className="flex-1 rounded-lg border px-3 py-2 text-sm"
+          placeholder="Type a message..."
+          value={textInput}
+          onChange={(e) => setTextInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={socketStatus !== "CONNECTED" || isSending}
+        />
+        <button
+          data-testid="send-button"
+          className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+          onClick={handleSendText}
+          disabled={socketStatus !== "CONNECTED" || !textInput.trim() || isSending}
+        >
+          {isSending ? "Sending..." : "Send"}
+        </button>
       </div>
     </div>
   );
