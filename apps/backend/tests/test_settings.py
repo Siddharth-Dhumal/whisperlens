@@ -12,6 +12,7 @@ def test_settings_defaults():
         s = Settings()
     assert s.ollama_base_url == "http://localhost:11434"
     assert s.ollama_model == "llama3.2"
+    assert s.stt_model == "base"
 
 
 def test_settings_from_env():
@@ -19,8 +20,10 @@ def test_settings_from_env():
     env = {
         "OLLAMA_BASE_URL": "http://gpu-box:11434",
         "OLLAMA_MODEL": "mistral",
+        "STT_MODEL": "tiny",
     }
     with mock.patch.dict(os.environ, env, clear=True):
         s = Settings()
     assert s.ollama_base_url == "http://gpu-box:11434"
     assert s.ollama_model == "mistral"
+    assert s.stt_model == "tiny"

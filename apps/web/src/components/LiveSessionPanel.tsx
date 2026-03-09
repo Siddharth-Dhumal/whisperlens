@@ -61,6 +61,11 @@ export default function LiveSessionPanel() {
           ]);
           setStreamingText("");
           setIsSending(false);
+        } else if (message.type === "stt_result") {
+          setChatHistory((prev) => [
+            ...prev,
+            { role: "user", text: message.text },
+          ]);
         } else if (message.type === "error") {
           setModel((prev) => ({
             ...prev,
@@ -166,6 +171,7 @@ export default function LiveSessionPanel() {
 
     try {
       await recorderRef.current.start();
+      socketRef.current?.sendControlMessage({ type: "audio_start" });
       setIsRecording(true);
       setModel((prev) => ({ ...prev, state: "RECORDING" }));
     } catch (error) {
@@ -179,6 +185,9 @@ export default function LiveSessionPanel() {
   function stopRecording() {
     recorderRef.current?.stop();
     setIsRecording(false);
+    setIsSending(true);
+
+    socketRef.current?.sendControlMessage({ type: "audio_end" });
 
     setModel((prev) => {
       const next = { ...prev, error: undefined };

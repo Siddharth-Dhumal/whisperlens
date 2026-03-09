@@ -143,4 +143,43 @@ describe("liveSocket message handling", () => {
 
         expect(mockSocket.send).toHaveBeenCalledWith("hello");
     });
+
+    it("dispatches stt_result messages via onMessage", () => {
+        const onMessage = vi.fn();
+        const client = createLiveSocketClient({
+            socketUrl: "ws://localhost:8000/ws/live",
+            onStatusChange: vi.fn(),
+            onMessage,
+            onError: vi.fn(),
+        });
+
+        client.connect();
+        mockSocket.onopen?.();
+
+        const payload: LiveSocketMessage = {
+            type: "stt_result",
+            text: "hello from voice",
+        };
+        mockSocket.onmessage?.({ data: JSON.stringify(payload) });
+
+        expect(onMessage).toHaveBeenCalledWith(payload);
+    });
+
+    it("sends JSON control messages via sendControlMessage", () => {
+        const client = createLiveSocketClient({
+            socketUrl: "ws://localhost:8000/ws/live",
+            onStatusChange: vi.fn(),
+            onMessage: vi.fn(),
+            onError: vi.fn(),
+        });
+
+        client.connect();
+        mockSocket.onopen?.();
+
+        client.sendControlMessage({ type: "audio_start" });
+
+        expect(mockSocket.send).toHaveBeenCalledWith(
+            JSON.stringify({ type: "audio_start" })
+        );
+    });
 });

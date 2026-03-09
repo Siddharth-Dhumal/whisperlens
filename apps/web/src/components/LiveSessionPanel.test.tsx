@@ -11,6 +11,7 @@ let capturedOnMessage: ((msg: Record<string, unknown>) => void) | null = null;
 let capturedOnStatusChange: ((status: string) => void) | null = null;
 
 const mockSendTextMessage = vi.fn();
+const mockSendControlMessage = vi.fn();
 const mockConnect = vi.fn();
 const mockDisconnect = vi.fn();
 
@@ -26,6 +27,7 @@ vi.mock("@/lib/liveSocket", () => ({
             disconnect: mockDisconnect,
             sendAudioChunk: vi.fn(),
             sendTextMessage: mockSendTextMessage,
+            sendControlMessage: mockSendControlMessage,
         };
     },
 }));
@@ -41,6 +43,7 @@ beforeEach(() => {
     capturedOnMessage = null;
     capturedOnStatusChange = null;
     mockSendTextMessage.mockClear();
+    mockSendControlMessage.mockClear();
     mockConnect.mockClear();
     mockDisconnect.mockClear();
 });
@@ -134,5 +137,17 @@ describe("LiveSessionPanel message handling", () => {
         const chatLog = screen.getByTestId("chat-log");
         expect(chatLog.textContent).toContain("You:");
         expect(chatLog.textContent).toContain("hello");
+    });
+
+    it("shows stt_result as user message in chat", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({ type: "stt_result", text: "hello from voice" });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+        expect(chatLog.textContent).toContain("You:");
+        expect(chatLog.textContent).toContain("hello from voice");
     });
 });

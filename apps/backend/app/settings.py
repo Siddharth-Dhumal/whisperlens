@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
+    stt_model: str = "base"
 
 
 @lru_cache

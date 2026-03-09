@@ -7,6 +7,7 @@ export type LiveSocketStatus =
 export type LiveSocketMessage =
     | { type: "transcript"; text: string }
     | { type: "turn_complete"; text: string }
+    | { type: "stt_result"; text: string }
     | { type: "error"; message: string };
 
 export type LiveSocketClient = {
@@ -14,6 +15,7 @@ export type LiveSocketClient = {
     disconnect: () => void;
     sendAudioChunk: (chunk: ArrayBuffer) => void;
     sendTextMessage: (message: string) => void;
+    sendControlMessage: (msg: Record<string, unknown>) => void;
 };
 
 type CreateLiveSocketClientArgs = {
@@ -83,10 +85,17 @@ export function createLiveSocketClient({
         }
     }
 
+    function sendControlMessage(msg: Record<string, unknown>) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(msg));
+        }
+    }
+
     return {
         connect,
         disconnect,
         sendAudioChunk,
         sendTextMessage,
+        sendControlMessage,
     };
 }
