@@ -17,3 +17,4 @@ dist/
 # Next.js env files
 .env.local
 .env.*.local
+whisperlens.db

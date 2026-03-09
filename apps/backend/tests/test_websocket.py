@@ -1,10 +1,11 @@
-"""Tests for the /ws/live WebSocket endpoint with mocked Ollama and STT."""
+"""Tests for the /ws/live WebSocket endpoint with mocked Ollama, STT, and DB."""
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -50,7 +51,6 @@ def test_live_websocket_text_round_trip():
         with client.websocket_connect("/ws/live") as websocket:
             websocket.send_text("hello")
 
-            # First: transcript chunks
             r1 = websocket.receive_json()
             assert r1["type"] == "transcript"
             assert r1["text"] == "Hello "
@@ -59,7 +59,6 @@ def test_live_websocket_text_round_trip():
             assert r2["type"] == "transcript"
             assert r2["text"] == "from Ollama!"
 
-            # Then: turn_complete with full text
             r3 = websocket.receive_json()
             assert r3["type"] == "turn_complete"
             assert r3["text"] == "Hello from Ollama!"
@@ -82,22 +81,15 @@ def test_audio_lifecycle_round_trip():
     with patch("app.main.OllamaSession", return_value=fake_ollama), \
          patch("app.main.SpeechToTextService", return_value=fake_stt):
         with client.websocket_connect("/ws/live") as websocket:
-            # Start audio recording
             websocket.send_text(json.dumps({"type": "audio_start"}))
-
-            # Send binary audio chunks
             websocket.send_bytes(b"\x00\x01\x02\x03")
             websocket.send_bytes(b"\x04\x05\x06\x07")
-
-            # End audio recording
             websocket.send_text(json.dumps({"type": "audio_end"}))
 
-            # Should get stt_result first
             r1 = websocket.receive_json()
             assert r1["type"] == "stt_result"
             assert r1["text"] == "hello from voice"
 
-            # Then Ollama response (transcript chunks + turn_complete)
             r2 = websocket.receive_json()
             assert r2["type"] == "transcript"
             assert r2["text"] == "Hello "
@@ -121,7 +113,6 @@ def test_audio_end_without_data_returns_error():
          patch("app.main.SpeechToTextService", return_value=_FakeStt()):
         with client.websocket_connect("/ws/live") as websocket:
             websocket.send_text(json.dumps({"type": "audio_start"}))
-            # No binary data sent
             websocket.send_text(json.dumps({"type": "audio_end"}))
 
             r1 = websocket.receive_json()
@@ -136,10 +127,7 @@ def test_binary_without_audio_start_is_ignored():
     with patch("app.main.OllamaSession", return_value=fake_ollama), \
          patch("app.main.SpeechToTextService", return_value=_FakeStt()):
         with client.websocket_connect("/ws/live") as websocket:
-            # Send binary without starting audio session
             websocket.send_bytes(b"\x00\x01\x02\x03")
-
-            # Send a text message to verify connection still works
             websocket.send_text("hello")
 
             r1 = websocket.receive_json()
@@ -153,9 +141,63 @@ def test_audio_end_without_audio_start_returns_error():
     with patch("app.main.OllamaSession", return_value=fake_ollama), \
          patch("app.main.SpeechToTextService", return_value=_FakeStt()):
         with client.websocket_connect("/ws/live") as websocket:
-            # audio_end without audio_start — buffer is empty
             websocket.send_text(json.dumps({"type": "audio_end"}))
 
             r1 = websocket.receive_json()
             assert r1["type"] == "error"
             assert "No audio data" in r1["message"]
+
+
+# ------------------------------------------------------------------
+# Persistence
+# ------------------------------------------------------------------
+
+
+def test_typed_turn_persists_messages():
+    """A typed chat turn should persist user + assistant messages."""
+    fake = _FakeOllamaSession()
+    mock_create = AsyncMock(return_value="session-123")
+    mock_add = AsyncMock(return_value="msg-1")
+
+    with patch("app.main.OllamaSession", return_value=fake), \
+         patch("app.main.SpeechToTextService", return_value=_FakeStt()), \
+         patch("app.main.create_session", mock_create), \
+         patch("app.main.add_message", mock_add):
+        with client.websocket_connect("/ws/live") as websocket:
+            websocket.send_text("hello world")
+
+            websocket.receive_json()  # transcript chunk 1
+            websocket.receive_json()  # transcript chunk 2
+            websocket.receive_json()  # turn_complete
+
+    mock_create.assert_awaited_once_with("hello world")
+    assert mock_add.await_count == 2
+    mock_add.assert_any_await("session-123", "user", "hello world", source="typed")
+    mock_add.assert_any_await("session-123", "assistant", "Hello from Ollama!")
+
+
+def test_voice_turn_persists_messages():
+    """A voice turn should persist user + assistant messages with source='voice'."""
+    fake_ollama = _FakeOllamaSession()
+    fake_stt = _FakeStt(transcript="hello from voice")
+    mock_create = AsyncMock(return_value="session-456")
+    mock_add = AsyncMock(return_value="msg-1")
+
+    with patch("app.main.OllamaSession", return_value=fake_ollama), \
+         patch("app.main.SpeechToTextService", return_value=fake_stt), \
+         patch("app.main.create_session", mock_create), \
+         patch("app.main.add_message", mock_add):
+        with client.websocket_connect("/ws/live") as websocket:
+            websocket.send_text(json.dumps({"type": "audio_start"}))
+            websocket.send_bytes(b"\x00\x01\x02\x03")
+            websocket.send_text(json.dumps({"type": "audio_end"}))
+
+            websocket.receive_json()  # stt_result
+            websocket.receive_json()  # transcript chunk 1
+            websocket.receive_json()  # transcript chunk 2
+            websocket.receive_json()  # turn_complete
+
+    mock_create.assert_awaited_once_with("hello from voice")
+    assert mock_add.await_count == 2
+    mock_add.assert_any_await("session-456", "user", "hello from voice", source="voice")
+    mock_add.assert_any_await("session-456", "assistant", "Hello from Ollama!")
