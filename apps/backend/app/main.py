@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -119,9 +120,9 @@ async def live_websocket(websocket: WebSocket) -> None:
                                 )
                                 continue
 
-                            # Transcribe audio (sync call — blocks briefly)
+                            # Transcribe audio in a thread to avoid blocking the event loop
                             try:
-                                transcript = stt.transcribe(bytes(audio_buffer))
+                                transcript = await asyncio.to_thread(stt.transcribe, bytes(audio_buffer))
                             except SttError as exc:
                                 logger.error("[ws/live] STT failed: %s", exc)
                                 await websocket.send_json(
