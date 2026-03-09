@@ -1,5 +1,6 @@
 import BackendStatus from "@/components/BackendStatus";
 import LiveSessionPanel from "@/components/LiveSessionPanel";
+import StudyVault from "@/components/StudyVault";
 
 export default function Home() {
   return (
@@ -13,13 +14,7 @@ export default function Home() {
         <div className="mt-8 grid gap-6">
           <BackendStatus />
           <LiveSessionPanel />
-
-          <div className="rounded-xl border p-4">
-            <div className="text-sm font-semibold">Study Vault</div>
-            <p className="mt-2 text-sm text-gray-600">
-              Later: your saved sessions, summaries, and Study Cards.
-            </p>
-          </div>
+          <StudyVault />
         </div>
       </div>
     </main>
