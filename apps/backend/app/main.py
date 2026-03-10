@@ -10,6 +10,7 @@ from app.db import add_message, create_session, get_session, init_db, list_sessi
 from app.ollama_live import OllamaError, OllamaSession
 from app.settings import get_settings
 from app.stt import SpeechToTextService, SttError
+from app.vision import VisionError, analyze_image
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,39 @@ async def api_get_session(session_id: str) -> dict:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=404, content={"detail": "Session not found"})
     return session
+
+
+# ------------------------------------------------------------------
+# Vision API
+# ------------------------------------------------------------------
+
+from pydantic import BaseModel
+
+
+class VisionRequest(BaseModel):
+    image: str  # base64-encoded image data
+    question: str = "Describe what you see."
+    session_id: str | None = None  # reuse existing session if provided
+
+
+@app.post("/api/vision")
+async def api_vision(req: VisionRequest) -> dict:
+    try:
+        answer = await analyze_image(req.image, req.question)
+    except VisionError as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    # Persist the vision turn
+    sid = req.session_id
+    user_text = req.question if req.question != "Describe what you see." else "📷 Snapshot"
+    if sid is None:
+        title = user_text[:60] + ("..." if len(user_text) > 60 else "")
+        sid = await create_session(title)
+    await add_message(sid, "user", user_text, source="vision")
+    await add_message(sid, "assistant", answer)
+
+    return {"answer": answer, "session_id": sid}
 
 
 # ------------------------------------------------------------------
