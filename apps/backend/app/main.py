@@ -3,6 +3,8 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -74,6 +76,7 @@ async def api_vision(req: VisionRequest) -> dict:
     try:
         answer = await analyze_image(req.image, req.question)
     except VisionError as exc:
+        logger.error("[vision] VisionError: %s", exc)
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=502, content={"detail": str(exc)})
 
@@ -87,6 +90,42 @@ async def api_vision(req: VisionRequest) -> dict:
     await add_message(sid, "assistant", answer)
 
     return {"answer": answer, "session_id": sid}
+
+
+@app.post("/api/vision/warm")
+async def api_vision_warm() -> dict:
+    """Pre-warm the vision model with a tiny image so the first real request is faster."""
+    settings = get_settings()
+    # 1x1 red JPEG — smallest valid image to trigger the vision pipeline
+    TINY_IMAGE_B64 = (
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQE"
+        "BQoHBwYIDAoMCwsKCwsKDA0QDBEKCQ4RERMTDAwQHBASFBQUFBQUFBQUFBT/"
+        "yQALCAABAAEBAREA/8wABgABAQEAAAAAAAAAAAAAAAAJAAr/2gAIAQEAAD8AVN//"
+        "2Q=="
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0),
+        ) as client:
+            await client.post(
+                f"{settings.ollama_base_url}/api/chat",
+                json={
+                    "model": settings.ollama_vision_model,
+                    "messages": [{
+                        "role": "user",
+                        "content": "Describe this image briefly.",
+                        "images": [TINY_IMAGE_B64],
+                    }],
+                    "stream": False,
+                    "keep_alive": "10m",
+                },
+            )
+    except Exception as exc:
+        logger.warning("[vision/warm] warm-up failed (non-fatal): %s", exc)
+        return {"status": "failed", "reason": str(exc)}
+
+    logger.info("[vision/warm] vision model pre-warmed")
+    return {"status": "ok"}
 
 
 # ------------------------------------------------------------------
@@ -230,6 +269,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                                 await websocket.send_json({"type": "session_created", "session_id": db_session_id})
                             await add_message(db_session_id, "user", transcript, source="voice")
                             await add_message(db_session_id, "assistant", response)
+                            await websocket.send_json({"type": "turn_saved"})
                             continue
 
                     # Plain text message (typed chat)
@@ -243,6 +283,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                         await websocket.send_json({"type": "session_created", "session_id": db_session_id})
                     await add_message(db_session_id, "user", text, source="typed")
                     await add_message(db_session_id, "assistant", response)
+                    await websocket.send_json({"type": "turn_saved"})
 
     except WebSocketDisconnect:
         logger.info("[ws/live] client disconnected (exception)")

@@ -154,7 +154,7 @@ def test_audio_end_without_audio_start_returns_error():
 
 
 def test_typed_turn_persists_messages():
-    """A typed chat turn should persist user + assistant messages and send session_created."""
+    """Typed turn should persist messages, send session_created, then turn_saved."""
     fake = _FakeOllamaSession()
     mock_create = AsyncMock(return_value="session-123")
     mock_add = AsyncMock(return_value="msg-1")
@@ -174,6 +174,9 @@ def test_typed_turn_persists_messages():
             assert sc["type"] == "session_created"
             assert sc["session_id"] == "session-123"
 
+            ts = websocket.receive_json()
+            assert ts["type"] == "turn_saved"
+
     mock_create.assert_awaited_once_with("hello world")
     assert mock_add.await_count == 2
     mock_add.assert_any_await("session-123", "user", "hello world", source="typed")
@@ -181,7 +184,7 @@ def test_typed_turn_persists_messages():
 
 
 def test_voice_turn_persists_messages():
-    """A voice turn should persist user + assistant messages and send session_created."""
+    """Voice turn should persist messages, send session_created, then turn_saved."""
     fake_ollama = _FakeOllamaSession()
     fake_stt = _FakeStt(transcript="hello from voice")
     mock_create = AsyncMock(return_value="session-456")
@@ -204,6 +207,9 @@ def test_voice_turn_persists_messages():
             sc = websocket.receive_json()
             assert sc["type"] == "session_created"
             assert sc["session_id"] == "session-456"
+
+            ts = websocket.receive_json()
+            assert ts["type"] == "turn_saved"
 
     mock_create.assert_awaited_once_with("hello from voice")
     assert mock_add.await_count == 2
@@ -229,13 +235,14 @@ def test_second_typed_turn_reuses_session():
             websocket.receive_json()  # turn_complete
             sc = websocket.receive_json()
             assert sc["type"] == "session_created"
+            websocket.receive_json()  # turn_saved
 
             # Second turn — should reuse session
             websocket.send_text("second message")
             websocket.receive_json()  # transcript 1
             websocket.receive_json()  # transcript 2
             websocket.receive_json()  # turn_complete
-            # No session_created for second turn
+            websocket.receive_json()  # turn_saved (no session_created)
 
     # create_session called only once
     mock_create.assert_awaited_once_with("first message")
@@ -265,7 +272,7 @@ def test_session_bind_reuses_existing_session():
             websocket.receive_json()  # transcript 1
             websocket.receive_json()  # transcript 2
             websocket.receive_json()  # turn_complete
-            # No session_created — session was already bound
+            websocket.receive_json()  # turn_saved
 
     # create_session should NOT have been called
     mock_create.assert_not_awaited()

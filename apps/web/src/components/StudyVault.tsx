@@ -24,7 +24,11 @@ type SessionDetail = SessionSummary & {
 const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
-export default function StudyVault() {
+type Props = {
+    refreshKey?: number;
+};
+
+export default function StudyVault({ refreshKey }: Props) {
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [selectedSession, setSelectedSession] = useState<SessionDetail | null>(
         null
@@ -50,6 +54,20 @@ export default function StudyVault() {
     useEffect(() => {
         fetchSessions();
     }, [fetchSessions]);
+
+    // Re-fetch whenever the parent signals a new turn was saved
+    useEffect(() => {
+        if (refreshKey === undefined || refreshKey === 0) return;
+        if (selectedSession) {
+            // A session is open: re-fetch its detail so new messages appear
+            openSession(selectedSession.id);
+        } else {
+            fetchSessions();
+        }
+        // openSession is defined inline; selectedSession changes are intentionally excluded
+        // so this effect only fires on refreshKey changes, not on every detail load
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [refreshKey]);
 
     async function openSession(id: string) {
         setError(null);
@@ -103,8 +121,8 @@ export default function StudyVault() {
                         <div
                             key={msg.id}
                             className={`rounded-lg p-2 text-sm ${msg.role === "user"
-                                    ? "bg-blue-50 text-blue-900"
-                                    : "bg-gray-50 text-gray-900"
+                                ? "bg-blue-50 text-blue-900"
+                                : "bg-gray-50 text-gray-900"
                                 }`}
                         >
                             <span className="font-medium">

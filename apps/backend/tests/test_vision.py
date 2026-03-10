@@ -63,7 +63,7 @@ async def test_analyze_image_success():
 
 @pytest.mark.asyncio
 async def test_analyze_image_empty_response():
-    """analyze_image should raise VisionError on empty response."""
+    """analyze_image should raise VisionError if both attempts return empty."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
@@ -76,6 +76,63 @@ async def test_analyze_image_empty_response():
 
     with patch("app.vision.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(VisionError, match="empty response"):
+            await analyze_image(FAKE_B64)
+
+    # Should have been called twice (initial + one retry)
+    assert mock_client.post.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_retry_on_empty_succeeds():
+    """analyze_image should retry once on empty and succeed if second attempt has content."""
+    empty_resp = MagicMock()
+    empty_resp.status_code = 200
+    empty_resp.raise_for_status = MagicMock()
+    empty_resp.json.return_value = {"message": {"content": ""}}
+
+    good_resp = MagicMock()
+    good_resp.status_code = 200
+    good_resp.raise_for_status = MagicMock()
+    good_resp.json.return_value = {"message": {"content": "I see a red pixel."}}
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=[empty_resp, good_resp])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.vision.httpx.AsyncClient", return_value=mock_client):
+        result = await analyze_image(FAKE_B64)
+
+    assert result == "I see a red pixel."
+    assert mock_client.post.await_count == 2
+
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_timeout():
+    """analyze_image should raise VisionError on timeout."""
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=httpx.ReadTimeout("read timed out"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.vision.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(VisionError, match="timed out"):
+            await analyze_image(FAKE_B64)
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_request_error():
+    """analyze_image should raise VisionError on generic network error."""
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        side_effect=httpx.RequestError("connection reset", request=MagicMock())
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.vision.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(VisionError, match="Network error"):
             await analyze_image(FAKE_B64)
 
 
@@ -174,4 +231,40 @@ def test_vision_first_continuity():
     assert msgs[1]["text"] == "Answer 1"
     assert msgs[2]["text"] == "Q2"
     assert msgs[3]["text"] == "Answer 2"
+
+
+def test_vision_warm_success():
+    """POST /api/vision/warm should send an image payload and return ok."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        resp = client.post("/api/vision/warm")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    # Verify the warm-up used a real image payload
+    call_kwargs = mock_client.post.call_args
+    payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+    assert "images" in payload["messages"][0]
+
+
+def test_vision_warm_failure_nonfatal():
+    """POST /api/vision/warm should return status=failed (not crash) if Ollama unreachable."""
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.main.httpx.AsyncClient", return_value=mock_client):
+        resp = client.post("/api/vision/warm")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
 

@@ -19,7 +19,11 @@ type ChatEntry = {
   text: string;
 };
 
-export default function LiveSessionPanel() {
+type Props = {
+  onTurnSaved?: () => void;
+};
+
+export default function LiveSessionPanel({ onTurnSaved }: Props) {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
   const [isRecording, setIsRecording] = useState(false);
   const [totalBytes, setTotalBytes] = useState(0);
@@ -44,6 +48,9 @@ export default function LiveSessionPanel() {
   const socketRef = useRef<LiveSocketClient | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  // Stable ref so the socket closure always sees the latest callback
+  const onTurnSavedRef = useRef(onTurnSaved);
+  onTurnSavedRef.current = onTurnSaved;
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -75,6 +82,8 @@ export default function LiveSessionPanel() {
           ]);
           setStreamingText("");
           setIsSending(false);
+        } else if (message.type === "turn_saved") {
+          onTurnSavedRef.current?.();
         } else if (message.type === "stt_result") {
           setChatHistory((prev) => [
             ...prev,
@@ -141,6 +150,9 @@ export default function LiveSessionPanel() {
         const next = { ...prev, cameraGranted: true, error: undefined };
         return { ...next, state: computeNextState(next) };
       });
+
+      // Pre-warm the vision model so the first request is faster
+      fetch(`${backendUrl}/api/vision/warm`, { method: "POST" }).catch(() => {});
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Camera permission failed";
@@ -218,19 +230,31 @@ export default function LiveSessionPanel() {
   function captureSnapshot() {
     const video = videoRef.current;
     if (!video) return;
+
+    // Constrain to max 1024px wide, preserve aspect ratio
+    const MAX_WIDTH = 1024;
+    let w = video.videoWidth;
+    let h = video.videoHeight;
+    if (w > MAX_WIDTH) {
+      h = Math.round(h * (MAX_WIDTH / w));
+      w = MAX_WIDTH;
+    }
+
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+    ctx.drawImage(video, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
     // Strip the data:image/jpeg;base64, prefix
     setSnapshotData(dataUrl.split(",")[1]);
   }
 
   async function handleSendVision(question: string) {
     setIsSending(true);
+    // Clear any stale error from a previous action
+    setModel((prev) => ({ ...prev, error: undefined, state: computeNextState({ ...prev, error: undefined }) }));
     const userText = question || "📷 Snapshot";
     setChatHistory((prev) => [...prev, { role: "user", text: `📷 ${userText}` }]);
     setSnapshotData(null);
@@ -246,9 +270,20 @@ export default function LiveSessionPanel() {
           session_id: sessionId ?? undefined,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        // Try to surface the backend's real error message
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body.detail) detail = body.detail;
+        } catch { /* ignore parse failure */ }
+        throw new Error(detail);
+      }
       const data = await res.json();
       setChatHistory((prev) => [...prev, { role: "assistant", text: data.answer }]);
+      // Clear error state on success
+      setModel((prev) => ({ ...prev, error: undefined, state: computeNextState({ ...prev, error: undefined }) }));
+      onTurnSavedRef.current?.();
       if (data.session_id) {
         setSessionId(data.session_id);
         sessionIdRef.current = data.session_id;
@@ -290,10 +325,6 @@ export default function LiveSessionPanel() {
     }
   }
 
-  const stateLabel = model.error
-    ? `ERROR: ${model.error.message}`
-    : model.state;
-
   const capturedKilobytes = (totalBytes / 1024).toFixed(1);
 
   return (
@@ -301,7 +332,12 @@ export default function LiveSessionPanel() {
       <div className="text-sm font-semibold">Live Session</div>
 
       <div className="mt-2 text-sm">
-        <span className="font-medium">State:</span> {stateLabel}
+        <span className="font-medium">State:</span>{" "}
+        {model.error ? (
+          <span data-testid="error-message">ERROR: {model.error.message}</span>
+        ) : (
+          model.state
+        )}
       </div>
 
       <div className="mt-1 text-sm">

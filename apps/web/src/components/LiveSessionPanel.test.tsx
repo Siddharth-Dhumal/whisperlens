@@ -230,4 +230,122 @@ describe("LiveSessionPanel message handling", () => {
             session_id: "vision-sid-123",
         });
     });
+
+    it("calls onTurnSaved on turn_saved, not on turn_complete", () => {
+        const onTurnSaved = vi.fn();
+        render(<LiveSessionPanel onTurnSaved={onTurnSaved} />);
+        act(() => { capturedOnStatusChange?.("CONNECTED"); });
+
+        // turn_complete updates chat UI but does NOT call onTurnSaved
+        act(() => {
+            capturedOnMessage?.({ type: "turn_complete", text: "Done!" });
+        });
+        expect(onTurnSaved).not.toHaveBeenCalled();
+
+        // turn_saved fires the callback
+        act(() => {
+            capturedOnMessage?.({ type: "turn_saved" });
+        });
+        expect(onTurnSaved).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces backend detail on vision error response", async () => {
+        // Mock getUserMedia so camera can be granted
+        const fakeStream = { getTracks: () => [] };
+        Object.defineProperty(navigator, "mediaDevices", {
+            value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
+            writable: true,
+        });
+
+        renderAndConnect();
+
+        // Grant camera
+        await act(async () => {
+            fireEvent.click(screen.getByText("Enable Camera"));
+        });
+
+        // Mock canvas
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+            { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+        );
+        vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+            "data:image/jpeg;base64,AAAA"
+        );
+        const video = document.querySelector("video");
+        if (video) {
+            Object.defineProperty(video, "videoWidth", { value: 640 });
+            Object.defineProperty(video, "videoHeight", { value: 480 });
+        }
+
+        // Capture snapshot
+        fireEvent.click(screen.getByTestId("capture-button"));
+
+        // Mock 502 with JSON detail
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+            ok: false,
+            status: 502,
+            json: async () => ({ detail: "Vision request timed out. The model may be loading or the image too large." }),
+        }));
+
+        await act(async () => {
+            fireEvent.click(screen.getByTestId("send-button"));
+        });
+
+        // The real detail should be shown, not just "HTTP 502"
+        const errorEl = screen.getByTestId("error-message");
+        expect(errorEl.textContent).toContain("timed out");
+        expect(errorEl.textContent).not.toContain("HTTP 502");
+    });
+
+    it("clears stale error after successful vision response", async () => {
+        // Mock getUserMedia
+        const fakeStream = { getTracks: () => [] };
+        Object.defineProperty(navigator, "mediaDevices", {
+            value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
+            writable: true,
+        });
+
+        renderAndConnect();
+
+        // Grant camera (ignore warm-up fetch)
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+        await act(async () => {
+            fireEvent.click(screen.getByText("Enable Camera"));
+        });
+
+        // Inject a stale error from a prior action
+        act(() => {
+            capturedOnMessage?.({ type: "error", message: "No audio data received" });
+        });
+        expect(screen.getByTestId("error-message")).toBeTruthy();
+
+        // Mock canvas
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+            { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+        );
+        vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+            "data:image/jpeg;base64,AAAA"
+        );
+        const video = document.querySelector("video");
+        if (video) {
+            Object.defineProperty(video, "videoWidth", { value: 640 });
+            Object.defineProperty(video, "videoHeight", { value: 480 });
+        }
+
+        // Capture snapshot
+        fireEvent.click(screen.getByTestId("capture-button"));
+
+        // Mock successful vision response
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ answer: "A cat.", session_id: "s1" }),
+        }));
+
+        await act(async () => {
+            fireEvent.click(screen.getByTestId("send-button"));
+        });
+
+        // Error should be cleared
+        expect(screen.queryByTestId("error-message")).toBeNull();
+    });
 });

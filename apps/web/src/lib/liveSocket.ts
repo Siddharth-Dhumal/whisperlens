@@ -9,6 +9,7 @@ export type LiveSocketMessage =
     | { type: "turn_complete"; text: string }
     | { type: "stt_result"; text: string }
     | { type: "session_created"; session_id: string }
+    | { type: "turn_saved" }
     | { type: "error"; message: string };
 
 export type LiveSocketClient = {
