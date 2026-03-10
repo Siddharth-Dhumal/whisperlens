@@ -154,7 +154,7 @@ def test_audio_end_without_audio_start_returns_error():
 
 
 def test_typed_turn_persists_messages():
-    """A typed chat turn should persist user + assistant messages."""
+    """A typed chat turn should persist user + assistant messages and send session_created."""
     fake = _FakeOllamaSession()
     mock_create = AsyncMock(return_value="session-123")
     mock_add = AsyncMock(return_value="msg-1")
@@ -170,6 +170,10 @@ def test_typed_turn_persists_messages():
             websocket.receive_json()  # transcript chunk 2
             websocket.receive_json()  # turn_complete
 
+            sc = websocket.receive_json()
+            assert sc["type"] == "session_created"
+            assert sc["session_id"] == "session-123"
+
     mock_create.assert_awaited_once_with("hello world")
     assert mock_add.await_count == 2
     mock_add.assert_any_await("session-123", "user", "hello world", source="typed")
@@ -177,7 +181,7 @@ def test_typed_turn_persists_messages():
 
 
 def test_voice_turn_persists_messages():
-    """A voice turn should persist user + assistant messages with source='voice'."""
+    """A voice turn should persist user + assistant messages and send session_created."""
     fake_ollama = _FakeOllamaSession()
     fake_stt = _FakeStt(transcript="hello from voice")
     mock_create = AsyncMock(return_value="session-456")
@@ -197,7 +201,75 @@ def test_voice_turn_persists_messages():
             websocket.receive_json()  # transcript chunk 2
             websocket.receive_json()  # turn_complete
 
+            sc = websocket.receive_json()
+            assert sc["type"] == "session_created"
+            assert sc["session_id"] == "session-456"
+
     mock_create.assert_awaited_once_with("hello from voice")
     assert mock_add.await_count == 2
     mock_add.assert_any_await("session-456", "user", "hello from voice", source="voice")
     mock_add.assert_any_await("session-456", "assistant", "Hello from Ollama!")
+
+
+def test_second_typed_turn_reuses_session():
+    """A second typed turn should reuse the existing session (no second create_session)."""
+    fake = _FakeOllamaSession()
+    mock_create = AsyncMock(return_value="session-789")
+    mock_add = AsyncMock(return_value="msg-1")
+
+    with patch("app.main.OllamaSession", return_value=fake), \
+         patch("app.main.SpeechToTextService", return_value=_FakeStt()), \
+         patch("app.main.create_session", mock_create), \
+         patch("app.main.add_message", mock_add):
+        with client.websocket_connect("/ws/live") as websocket:
+            # First turn — creates session
+            websocket.send_text("first message")
+            websocket.receive_json()  # transcript 1
+            websocket.receive_json()  # transcript 2
+            websocket.receive_json()  # turn_complete
+            sc = websocket.receive_json()
+            assert sc["type"] == "session_created"
+
+            # Second turn — should reuse session
+            websocket.send_text("second message")
+            websocket.receive_json()  # transcript 1
+            websocket.receive_json()  # transcript 2
+            websocket.receive_json()  # turn_complete
+            # No session_created for second turn
+
+    # create_session called only once
+    mock_create.assert_awaited_once_with("first message")
+    # 4 add_message calls (2 per turn)
+    assert mock_add.await_count == 4
+
+
+def test_session_bind_reuses_existing_session():
+    """session_bind should set the session id so typed turns skip create_session."""
+    fake = _FakeOllamaSession()
+    mock_create = AsyncMock(return_value="should-not-be-called")
+    mock_add = AsyncMock(return_value="msg-1")
+
+    with patch("app.main.OllamaSession", return_value=fake), \
+         patch("app.main.SpeechToTextService", return_value=_FakeStt()), \
+         patch("app.main.create_session", mock_create), \
+         patch("app.main.add_message", mock_add):
+        with client.websocket_connect("/ws/live") as websocket:
+            # Bind to an existing session before any turn
+            websocket.send_text(json.dumps({
+                "type": "session_bind",
+                "session_id": "existing-session-abc",
+            }))
+
+            # Send a typed message
+            websocket.send_text("hello after bind")
+            websocket.receive_json()  # transcript 1
+            websocket.receive_json()  # transcript 2
+            websocket.receive_json()  # turn_complete
+            # No session_created — session was already bound
+
+    # create_session should NOT have been called
+    mock_create.assert_not_awaited()
+    # add_message should use the bound session id
+    assert mock_add.await_count == 2
+    mock_add.assert_any_await("existing-session-abc", "user", "hello after bind", source="typed")
+    mock_add.assert_any_await("existing-session-abc", "assistant", "Hello from Ollama!")

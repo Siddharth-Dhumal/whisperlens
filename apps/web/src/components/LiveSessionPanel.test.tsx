@@ -150,4 +150,84 @@ describe("LiveSessionPanel message handling", () => {
         expect(chatLog.textContent).toContain("You:");
         expect(chatLog.textContent).toContain("hello from voice");
     });
+
+    it("sends session_bind on connect when sessionId exists", () => {
+        renderAndConnect();
+
+        // Simulate receiving session_created from a prior turn
+        act(() => {
+            capturedOnMessage?.({ type: "session_created", session_id: "existing-abc" });
+        });
+
+        mockSendControlMessage.mockClear();
+
+        // Simulate a reconnect — status goes to CONNECTED again
+        act(() => {
+            capturedOnStatusChange?.("CONNECTED");
+        });
+
+        expect(mockSendControlMessage).toHaveBeenCalledWith({
+            type: "session_bind",
+            session_id: "existing-abc",
+        });
+    });
+
+    it("sends session_bind after vision response while ws connected", async () => {
+        // Mock getUserMedia so camera can be granted
+        const fakeStream = { getTracks: () => [] };
+        Object.defineProperty(navigator, "mediaDevices", {
+            value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
+            writable: true,
+        });
+
+        renderAndConnect();
+
+        // Grant camera permission
+        const cameraBtn = screen.getByText("Enable Camera");
+        await act(async () => {
+            fireEvent.click(cameraBtn);
+        });
+
+        // Mock canvas so captureSnapshot works
+        const mockCtx = { drawImage: vi.fn() };
+        vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+            mockCtx as unknown as CanvasRenderingContext2D
+        );
+        vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+            "data:image/jpeg;base64,AAAA"
+        );
+
+        // Set videoRef dimensions so captureSnapshot proceeds
+        const video = document.querySelector("video");
+        if (video) {
+            Object.defineProperty(video, "videoWidth", { value: 640 });
+            Object.defineProperty(video, "videoHeight", { value: 480 });
+        }
+
+        // Click Capture to set snapshotData
+        const captureBtn = screen.getByTestId("capture-button");
+        fireEvent.click(captureBtn);
+
+        // Mock fetch for vision endpoint
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue({
+                ok: true,
+                json: async () => ({ answer: "I see something", session_id: "vision-sid-123" }),
+            })
+        );
+
+        mockSendControlMessage.mockClear();
+
+        // Click Send (with snapshot attached, no text → sends vision)
+        const sendBtn = screen.getByTestId("send-button");
+        await act(async () => {
+            fireEvent.click(sendBtn);
+        });
+
+        expect(mockSendControlMessage).toHaveBeenCalledWith({
+            type: "session_bind",
+            session_id: "vision-sid-123",
+        });
+    });
 });

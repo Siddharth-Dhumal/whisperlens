@@ -138,3 +138,40 @@ def test_vision_endpoint_ollama_error():
 
     assert resp.status_code == 502
     assert "model error" in resp.json()["detail"]
+
+
+def test_vision_first_continuity():
+    """Two vision requests should share one session when session_id is reused."""
+    import sqlite3
+    from app.db import _get_db_path
+
+    with patch("app.main.analyze_image", new_callable=AsyncMock, return_value="Answer 1"):
+        r1 = client.post("/api/vision", json={"image": FAKE_B64, "question": "Q1"})
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+
+    # Second vision request reuses session_id from first
+    with patch("app.main.analyze_image", new_callable=AsyncMock, return_value="Answer 2"):
+        r2 = client.post("/api/vision", json={
+            "image": FAKE_B64,
+            "question": "Q2",
+            "session_id": sid,
+        })
+    assert r2.status_code == 200
+    assert r2.json()["session_id"] == sid  # same session
+
+    # Verify all 4 messages in one session
+    conn = sqlite3.connect(_get_db_path())
+    conn.row_factory = sqlite3.Row
+    msgs = conn.execute(
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+        (sid,),
+    ).fetchall()
+    conn.close()
+
+    assert len(msgs) == 4
+    assert msgs[0]["text"] == "Q1"
+    assert msgs[1]["text"] == "Answer 1"
+    assert msgs[2]["text"] == "Q2"
+    assert msgs[3]["text"] == "Answer 2"
+
