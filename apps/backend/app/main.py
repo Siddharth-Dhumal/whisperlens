@@ -182,6 +182,13 @@ async def live_websocket(websocket: WebSocket) -> None:
                             logger.info("[ws/live] audio recording started")
                             continue
 
+                        if ctrl_type == "session_bind":
+                            bound_id = control.get("session_id", "")
+                            if bound_id:
+                                db_session_id = bound_id
+                                logger.info("[ws/live] session bound to %s", bound_id)
+                            continue
+
                         if ctrl_type == "audio_end":
                             audio_recording = False
                             logger.info(
@@ -220,6 +227,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                             if db_session_id is None:
                                 title = transcript[:60] + ("..." if len(transcript) > 60 else "")
                                 db_session_id = await create_session(title)
+                                await websocket.send_json({"type": "session_created", "session_id": db_session_id})
                             await add_message(db_session_id, "user", transcript, source="voice")
                             await add_message(db_session_id, "assistant", response)
                             continue
@@ -232,6 +240,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                     if db_session_id is None:
                         title = text[:60] + ("..." if len(text) > 60 else "")
                         db_session_id = await create_session(title)
+                        await websocket.send_json({"type": "session_created", "session_id": db_session_id})
                     await add_message(db_session_id, "user", text, source="typed")
                     await add_message(db_session_id, "assistant", response)
 

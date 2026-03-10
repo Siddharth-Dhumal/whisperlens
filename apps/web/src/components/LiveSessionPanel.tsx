@@ -32,6 +32,7 @@ export default function LiveSessionPanel() {
   const [textInput, setTextInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [snapshotData, setSnapshotData] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
@@ -42,6 +43,7 @@ export default function LiveSessionPanel() {
   const recorderRef = useRef<AudioRecorder | null>(null);
   const socketRef = useRef<LiveSocketClient | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -54,7 +56,15 @@ export default function LiveSessionPanel() {
 
     socketRef.current = createLiveSocketClient({
       socketUrl,
-      onStatusChange: (status) => setSocketStatus(status),
+      onStatusChange: (status) => {
+        setSocketStatus(status);
+        if (status === "CONNECTED" && sessionIdRef.current) {
+          socketRef.current?.sendControlMessage({
+            type: "session_bind",
+            session_id: sessionIdRef.current,
+          });
+        }
+      },
       onMessage: (message: LiveSocketMessage) => {
         if (message.type === "transcript") {
           setStreamingText((prev) => prev + message.text);
@@ -70,6 +80,9 @@ export default function LiveSessionPanel() {
             ...prev,
             { role: "user", text: message.text },
           ]);
+        } else if (message.type === "session_created") {
+          setSessionId(message.session_id);
+          sessionIdRef.current = message.session_id;
         } else if (message.type === "error") {
           setModel((prev) => ({
             ...prev,
@@ -159,6 +172,8 @@ export default function LiveSessionPanel() {
     setIsSending(false);
     setModel(createInitialSessionModel());
     setSnapshotData(null);
+    setSessionId(null);
+    sessionIdRef.current = null;
   }
 
   function connectSocket() {
@@ -225,11 +240,24 @@ export default function LiveSessionPanel() {
       const res = await fetch(`${backendUrl}/api/vision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: snapshotData, question: question || undefined }),
+        body: JSON.stringify({
+          image: snapshotData,
+          question: question || undefined,
+          session_id: sessionId ?? undefined,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setChatHistory((prev) => [...prev, { role: "assistant", text: data.answer }]);
+      if (data.session_id) {
+        setSessionId(data.session_id);
+        sessionIdRef.current = data.session_id;
+        // Bind to the WS handler so subsequent typed/voice turns reuse this session
+        socketRef.current?.sendControlMessage({
+          type: "session_bind",
+          session_id: data.session_id,
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Vision request failed";
       setModel((prev) => ({ ...prev, error: { message: msg }, state: "ERROR" }));
