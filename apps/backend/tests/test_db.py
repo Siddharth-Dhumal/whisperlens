@@ -24,7 +24,7 @@ def _use_temp_db():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     set_db_path(path)
-    asyncio.get_event_loop().run_until_complete(init_db())
+    asyncio.run(init_db())
     yield
     os.unlink(path)
 
