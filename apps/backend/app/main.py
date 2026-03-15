@@ -5,14 +5,16 @@ from contextlib import asynccontextmanager
 
 import httpx
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from app.db import add_message, create_session, get_session, init_db, list_sessions
+from app.db import add_message, create_session, get_session, init_db, list_sessions, get_document, list_documents, search_document_chunks
 from app.ollama_live import OllamaError, OllamaSession
 from app.settings import get_settings
 from app.stt import SpeechToTextService, SttError
 from app.vision import VisionError, analyze_image
+from app.study_sources import ingest_document
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,11 @@ app.add_middleware(
 def health_check() -> dict:
     return {"status": "ok"}
 
+class StudySourceCreateRequest(BaseModel):
+    title: str
+    source_type: str = "pasted_text"
+    content: str
+    max_chars: int = 800
 
 # ------------------------------------------------------------------
 # Study Vault REST API
@@ -61,9 +68,6 @@ async def api_get_session(session_id: str) -> dict:
 # ------------------------------------------------------------------
 # Vision API
 # ------------------------------------------------------------------
-
-from pydantic import BaseModel
-
 
 class VisionRequest(BaseModel):
     image: str  # base64-encoded image data
@@ -126,6 +130,45 @@ async def api_vision_warm() -> dict:
 
     logger.info("[vision/warm] vision model pre-warmed")
     return {"status": "ok"}
+
+
+@app.post("/api/study-sources")
+async def create_study_source(payload: StudySourceCreateRequest) -> dict:
+    """Create a new study source, chunk it, and persist it locally."""
+    try:
+        return await ingest_document(
+            title=payload.title,
+            source_type=payload.source_type,
+            content=payload.content,
+            max_chars=payload.max_chars,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/study-sources")
+async def api_list_study_sources() -> list[dict]:
+    """Return all stored study sources."""
+    return await list_documents()
+
+
+@app.get("/api/study-sources/search")
+async def api_search_study_sources(q: str, limit: int = 5) -> list[dict]:
+    """Search study-source chunks using local SQLite FTS."""
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be at least 1")
+
+    capped_limit = min(limit, 20)
+    return await search_document_chunks(query=q, limit=capped_limit)
+
+
+@app.get("/api/study-sources/{document_id}")
+async def api_get_study_source(document_id: str) -> dict:
+    """Return one study source with all of its chunks."""
+    document = await get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="study source not found")
+    return document
 
 
 # ------------------------------------------------------------------
