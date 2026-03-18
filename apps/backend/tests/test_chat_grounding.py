@@ -31,13 +31,16 @@ def _use_temp_db():
     os.unlink(path)
 
 
-def test_build_grounded_user_prompt_returns_original_text_when_no_matches():
+def test_build_grounded_user_prompt_builds_explicit_no_context_prompt_when_no_matches():
     prompt = build_grounded_user_prompt(
         "Explain matrix multiplication",
         [],
     )
 
-    assert prompt == "Explain matrix multiplication"
+    assert "No matching study-source context was found for this turn." in prompt
+    assert "Do not rely on study-source context from earlier turns" in prompt
+    assert "User question:" in prompt
+    assert "Explain matrix multiplication" in prompt
 
 
 def test_build_grounded_user_prompt_includes_context_when_matches_exist():
@@ -72,11 +75,14 @@ def test_build_grounded_user_prompt_includes_context_when_matches_exist():
 
 
 @pytest.mark.asyncio
-async def test_build_grounded_prompt_for_query_returns_original_text_when_no_match():
+async def test_build_grounded_prompt_for_query_builds_explicit_no_context_prompt_when_no_match():
     result = await build_grounded_prompt_for_query("What is a compiler?")
 
     assert result["matches"] == []
-    assert result["prompt"] == "What is a compiler?"
+    assert "No matching study-source context was found for this turn." in result["prompt"]
+    assert "Do not rely on study-source context from earlier turns" in result["prompt"]
+    assert "User question:" in result["prompt"]
+    assert "What is a compiler?" in result["prompt"]
 
 
 @pytest.mark.asyncio
@@ -106,3 +112,32 @@ async def test_build_grounded_prompt_for_query_uses_local_fts_matches():
     assert "Operating Systems Notes" in result["prompt"]
     assert "A process is a program in execution." in result["prompt"]
     assert "What is a process?" in result["prompt"]
+
+@pytest.mark.asyncio
+async def test_build_grounded_prompt_for_query_does_not_reuse_previous_turn_context():
+    document_id = await create_document(
+        title="Operating Systems Notes",
+        source_type="pasted_text",
+        content="Processes, threads, and scheduling.",
+    )
+
+    await add_document_chunk(
+        document_id=document_id,
+        chunk_index=0,
+        text="A process is a program in execution.",
+    )
+
+    first_result = await build_grounded_prompt_for_query("What is a process?")
+    second_result = await build_grounded_prompt_for_query("What is photosynthesis?")
+
+    assert len(first_result["matches"]) >= 1
+    assert "Operating Systems Notes" in first_result["prompt"]
+    assert "A process is a program in execution." in first_result["prompt"]
+
+    assert second_result["matches"] == []
+    assert "No matching study-source context was found for this turn." in second_result["prompt"]
+    assert "Do not rely on study-source context from earlier turns" in second_result["prompt"]
+    assert "What is photosynthesis?" in second_result["prompt"]
+
+    assert "Operating Systems Notes" not in second_result["prompt"]
+    assert "A process is a program in execution." not in second_result["prompt"]

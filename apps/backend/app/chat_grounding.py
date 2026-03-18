@@ -12,8 +12,11 @@ def build_grounded_user_prompt(user_text: str, matches: list[dict]) -> str:
     Build the exact text that we will send to the local model.
 
     Rules:
-    - If there is no matching study-source context, return the user text as-is.
-    - If matches exist, prepend a deterministic local context block.
+    - Always build a turn-scoped prompt for typed chat.
+    - If matches exist, include them as this turn's study-source context.
+    - If no matches exist, explicitly state that this turn has no matching
+      study-source context and instruct the model not to rely on earlier
+      study-source context from prior turns.
     """
     clean_user_text = user_text.strip()
 
@@ -21,7 +24,14 @@ def build_grounded_user_prompt(user_text: str, matches: list[dict]) -> str:
         return ""
 
     if not matches:
-        return clean_user_text
+        return (
+            "You are WhisperLens, a local-first study assistant.\n"
+            "No matching study-source context was found for this turn.\n"
+            "Do not rely on study-source context from earlier turns when answering this question.\n"
+            "Answer normally and be clear about the absence of relevant study-note context.\n\n"
+            "User question:\n"
+            f"{clean_user_text}"
+        )
 
     context_sections: list[str] = []
 
