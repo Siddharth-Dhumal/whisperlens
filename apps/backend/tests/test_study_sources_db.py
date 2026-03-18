@@ -126,3 +126,31 @@ async def test_search_document_chunks_finds_relevant_chunk_and_title():
 async def test_search_document_chunks_returns_empty_for_blank_query():
     results = await search_document_chunks("   ")
     assert results == []
+
+@pytest.mark.asyncio
+async def test_search_document_chunks_handles_natural_language_query_with_punctuation():
+    document_id = await create_document(
+        title="Operating Systems Notes",
+        source_type="pasted_text",
+        content="Processes and threads.",
+    )
+
+    await add_document_chunk(
+        document_id,
+        0,
+        "A process is a program in execution.",
+    )
+
+    matches = await search_document_chunks("What is a process?", limit=3)
+
+    assert len(matches) == 1
+    assert matches[0]["document_id"] == document_id
+    assert matches[0]["document_title"] == "Operating Systems Notes"
+    assert matches[0]["chunk_index"] == 0
+    assert "process" in matches[0]["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_search_document_chunks_returns_empty_for_only_stopword_style_query():
+    results = await search_document_chunks("what is it?")
+    assert results == []

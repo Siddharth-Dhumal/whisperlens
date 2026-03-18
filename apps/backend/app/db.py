@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import re
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -31,6 +32,74 @@ def set_db_path(path: str) -> None:
 def _now_iso() -> str:
     """Return the current UTC time in ISO-8601 format."""
     return datetime.now(timezone.utc).isoformat()
+
+_FTS_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "did",
+    "do",
+    "does",
+    "explain",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "me",
+    "of",
+    "on",
+    "or",
+    "tell",
+    "the",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
+
+
+def _build_fts5_query(query: str) -> str:
+    """
+    Convert natural-language user input into a safe FTS5 query.
+
+    Examples:
+    - "What is a process?" -> '"process"'
+    - "Explain matrix multiplication" -> '"matrix" OR "multiplication"'
+    """
+    raw_tokens = re.findall(r"[A-Za-z0-9_]+", query.lower())
+
+    filtered_tokens: list[str] = []
+    seen_tokens: set[str] = set()
+
+    for token in raw_tokens:
+        if len(token) < 2:
+            continue
+        if token in _FTS_STOP_WORDS:
+            continue
+        if token in seen_tokens:
+            continue
+
+        filtered_tokens.append(token)
+        seen_tokens.add(token)
+
+    if not filtered_tokens:
+        return ""
+
+    return " OR ".join(f'"{token}"' for token in filtered_tokens)
 
 
 async def _enable_foreign_keys(db: aiosqlite.Connection) -> None:
@@ -325,6 +394,10 @@ async def search_document_chunks(query: str, limit: int = 5) -> list[dict]:
     if not stripped_query:
         return []
 
+    fts_query = _build_fts5_query(stripped_query)
+    if not fts_query:
+        return []
+
     async with aiosqlite.connect(_get_db_path()) as db:
         await _enable_foreign_keys(db)
         db.row_factory = aiosqlite.Row
@@ -348,7 +421,7 @@ async def search_document_chunks(query: str, limit: int = 5) -> list[dict]:
             ORDER BY bm25(document_chunks_fts), dc.chunk_index ASC
             LIMIT ?
             """,
-            (stripped_query, limit),
+            (fts_query, limit),
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
