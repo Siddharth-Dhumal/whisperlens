@@ -15,6 +15,7 @@ from app.settings import get_settings
 from app.stt import SpeechToTextService, SttError
 from app.vision import VisionError, analyze_image
 from app.study_sources import ingest_document
+from app.chat_grounding import build_grounded_prompt_for_query
 
 logger = logging.getLogger(__name__)
 
@@ -317,9 +318,17 @@ async def live_websocket(websocket: WebSocket) -> None:
 
                     # Plain text message (typed chat)
                     logger.info("[ws/live] received text: %s", text[:80])
-                    response = await _handle_ollama_turn(websocket, ollama, text)
 
-                    # Persist the turn
+                    grounding = await build_grounded_prompt_for_query(text)
+                    grounded_prompt = grounding["prompt"]
+
+                    response = await _handle_ollama_turn(
+                        websocket,
+                        ollama,
+                        grounded_prompt,
+                    )
+
+                    # Persist the raw typed turn, not the grounded prompt
                     if db_session_id is None:
                         title = text[:60] + ("..." if len(text) > 60 else "")
                         db_session_id = await create_session(title)
