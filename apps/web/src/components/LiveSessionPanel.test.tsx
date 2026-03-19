@@ -420,4 +420,23 @@ describe("LiveSessionPanel message handling", () => {
             "Used 3 study chunks from Operating Systems Notes and 1 other source"
         );
     });
+
+    it("does not show a source hint when turn_complete has no source_info", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "Here is a normal assistant reply without grounding metadata.",
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "Here is a normal assistant reply without grounding metadata."
+        );
+        expect(screen.queryByText(/Used study source:/i)).toBeNull();
+        expect(screen.queryByText(/Used \d+ study chunks from/i)).toBeNull();
+    });
 });
