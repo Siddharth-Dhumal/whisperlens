@@ -371,4 +371,28 @@ describe("LiveSessionPanel message handling", () => {
             "Used 2 study chunks from Operating Systems Notes"
         );
     });
+
+    it("does not show a source hint when turn_complete source_info reports no match", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "I could not find a relevant match in your study sources.",
+                source_info: {
+                    matched: false,
+                    match_count: 0,
+                    source_titles: [],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "I could not find a relevant match in your study sources."
+        );
+        expect(screen.queryByText(/Used study source:/i)).toBeNull();
+        expect(screen.queryByText(/Used \d+ study chunks from/i)).toBeNull();
+    });
 });
