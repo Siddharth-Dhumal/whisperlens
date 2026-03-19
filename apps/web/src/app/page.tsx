@@ -4,6 +4,7 @@ import { useState } from "react";
 import BackendStatus from "@/components/BackendStatus";
 import LiveSessionPanel from "@/components/LiveSessionPanel";
 import StudyVault from "@/components/StudyVault";
+import StudySources from "@/components/StudySources";
 
 export default function Home() {
   const [refreshCount, setRefreshCount] = useState(0);
@@ -19,6 +20,7 @@ export default function Home() {
         <div className="mt-8 grid gap-6">
           <BackendStatus />
           <LiveSessionPanel onTurnSaved={() => setRefreshCount((n) => n + 1)} />
+          <StudySources />
           <StudyVault refreshKey={refreshCount} />
         </div>
       </div>
