@@ -7,6 +7,7 @@ import {
   type LiveSocketClient,
   type LiveSocketMessage,
   type LiveSocketStatus,
+  type SourceInfo,
 } from "@/lib/liveSocket";
 import {
   computeNextState,
@@ -17,11 +18,38 @@ import {
 type ChatEntry = {
   role: "user" | "assistant";
   text: string;
+  sourceInfo?: SourceInfo;
 };
 
 type Props = {
   onTurnSaved?: () => void;
 };
+
+function buildSourceHint(sourceInfo?: SourceInfo): string | null {
+  if (!sourceInfo || !sourceInfo.matched || sourceInfo.match_count < 1) {
+    return null;
+  }
+
+  const firstTitle = sourceInfo.source_titles[0];
+  if (!firstTitle) {
+    return null;
+  }
+
+  if (sourceInfo.match_count === 1) {
+    return `Used study source: ${firstTitle}`;
+  }
+
+  const additionalSourceCount = Math.max(sourceInfo.source_titles.length - 1, 0);
+
+  if (additionalSourceCount === 0) {
+    return `Used ${sourceInfo.match_count} study chunks from ${firstTitle}`;
+  }
+
+  const sourceLabel =
+    additionalSourceCount === 1 ? "other source" : "other sources";
+
+  return `Used ${sourceInfo.match_count} study chunks from ${firstTitle} and ${additionalSourceCount} ${sourceLabel}`;
+}
 
 export default function LiveSessionPanel({ onTurnSaved }: Props) {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
@@ -48,11 +76,9 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
   const socketRef = useRef<LiveSocketClient | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  // Stable ref so the socket closure always sees the latest callback
   const onTurnSavedRef = useRef(onTurnSaved);
   onTurnSavedRef.current = onTurnSaved;
 
-  // Auto-scroll chat to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [chatHistory, streamingText]);
@@ -78,7 +104,11 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         } else if (message.type === "turn_complete") {
           setChatHistory((prev) => [
             ...prev,
-            { role: "assistant", text: message.text },
+            {
+              role: "assistant",
+              text: message.text,
+              sourceInfo: message.source_info,
+            },
           ]);
           setStreamingText("");
           setIsSending(false);
@@ -151,8 +181,7 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         return { ...next, state: computeNextState(next) };
       });
 
-      // Pre-warm the vision model so the first request is faster
-      fetch(`${backendUrl}/api/vision/warm`, { method: "POST" }).catch(() => {});
+      fetch(`${backendUrl}/api/vision/warm`, { method: "POST" }).catch(() => { });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Camera permission failed";
@@ -231,7 +260,6 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     const video = videoRef.current;
     if (!video) return;
 
-    // Constrain to max 1024px wide, preserve aspect ratio
     const MAX_WIDTH = 1024;
     let w = video.videoWidth;
     let h = video.videoHeight;
@@ -247,14 +275,16 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
-    // Strip the data:image/jpeg;base64, prefix
     setSnapshotData(dataUrl.split(",")[1]);
   }
 
   async function handleSendVision(question: string) {
     setIsSending(true);
-    // Clear any stale error from a previous action
-    setModel((prev) => ({ ...prev, error: undefined, state: computeNextState({ ...prev, error: undefined }) }));
+    setModel((prev) => ({
+      ...prev,
+      error: undefined,
+      state: computeNextState({ ...prev, error: undefined }),
+    }));
     const userText = question || "📷 Snapshot";
     setChatHistory((prev) => [...prev, { role: "user", text: `📷 ${userText}` }]);
     setSnapshotData(null);
@@ -271,23 +301,24 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         }),
       });
       if (!res.ok) {
-        // Try to surface the backend's real error message
         let detail = `HTTP ${res.status}`;
         try {
           const body = await res.json();
           if (body.detail) detail = body.detail;
-        } catch { /* ignore parse failure */ }
+        } catch { }
         throw new Error(detail);
       }
       const data = await res.json();
       setChatHistory((prev) => [...prev, { role: "assistant", text: data.answer }]);
-      // Clear error state on success
-      setModel((prev) => ({ ...prev, error: undefined, state: computeNextState({ ...prev, error: undefined }) }));
+      setModel((prev) => ({
+        ...prev,
+        error: undefined,
+        state: computeNextState({ ...prev, error: undefined }),
+      }));
       onTurnSavedRef.current?.();
       if (data.session_id) {
         setSessionId(data.session_id);
         sessionIdRef.current = data.session_id;
-        // Bind to the WS handler so subsequent typed/voice turns reuse this session
         socketRef.current?.sendControlMessage({
           type: "session_bind",
           session_id: data.session_id,
@@ -305,7 +336,6 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     const trimmed = textInput.trim();
     if (!trimmed) return;
 
-    // If snapshot is attached, use vision endpoint
     if (snapshotData) {
       handleSendVision(trimmed);
       return;
@@ -405,7 +435,6 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
 
         {snapshotData && (
           <div className="mt-2 flex items-center gap-2" data-testid="snapshot-preview">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={`data:image/jpeg;base64,${snapshotData}`}
               alt="Snapshot"
@@ -444,7 +473,6 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         </div>
       </div>
 
-      {/* Chat transcript */}
       <div className="mt-4">
         <div className="text-sm font-semibold">Chat</div>
         <div
@@ -456,14 +484,29 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
               No messages yet. Connect the socket and send a message below.
             </div>
           )}
-          {chatHistory.map((entry, i) => (
-            <div key={i} className={`mb-2 ${entry.role === "user" ? "text-blue-600" : "text-gray-800"}`}>
-              <span className="font-medium">
-                {entry.role === "user" ? "You: " : "AI: "}
-              </span>
-              {entry.text}
-            </div>
-          ))}
+          {chatHistory.map((entry, i) => {
+            const sourceHint =
+              entry.role === "assistant" ? buildSourceHint(entry.sourceInfo) : null;
+
+            return (
+              <div
+                key={i}
+                className={`mb-2 ${entry.role === "user" ? "text-blue-600" : "text-gray-800"}`}
+              >
+                <div>
+                  <span className="font-medium">
+                    {entry.role === "user" ? "You: " : "AI: "}
+                  </span>
+                  {entry.text}
+                </div>
+                {sourceHint && (
+                  <div className="ml-8 mt-1 text-xs text-gray-500">
+                    {sourceHint}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {streamingText && (
             <div data-testid="streaming-text" className="mb-2 text-gray-800">
               <span className="font-medium">AI: </span>
@@ -475,7 +518,6 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         </div>
       </div>
 
-      {/* Debug text input */}
       <div className="mt-3 flex gap-2">
         <input
           data-testid="text-input"

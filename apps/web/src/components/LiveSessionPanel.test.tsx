@@ -348,4 +348,95 @@ describe("LiveSessionPanel message handling", () => {
         // Error should be cleared
         expect(screen.queryByTestId("error-message")).toBeNull();
     });
+
+    it("shows a lightweight source hint under an assistant reply when turn_complete includes source_info", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "A process is a program in execution.",
+                source_info: {
+                    matched: true,
+                    match_count: 2,
+                    source_titles: ["Operating Systems Notes"],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain("A process is a program in execution.");
+        expect(chatLog.textContent).toContain(
+            "Used 2 study chunks from Operating Systems Notes"
+        );
+    });
+
+    it("does not show a source hint when turn_complete source_info reports no match", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "I could not find a relevant match in your study sources.",
+                source_info: {
+                    matched: false,
+                    match_count: 0,
+                    source_titles: [],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "I could not find a relevant match in your study sources."
+        );
+        expect(screen.queryByText(/Used study source:/i)).toBeNull();
+        expect(screen.queryByText(/Used \d+ study chunks from/i)).toBeNull();
+    });
+
+    it("shows a compact multi-source hint when matches come from more than one study source", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "Processes and threads are related but not the same.",
+                source_info: {
+                    matched: true,
+                    match_count: 3,
+                    source_titles: ["Operating Systems Notes", "Concurrency Notes"],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "Processes and threads are related but not the same."
+        );
+        expect(chatLog.textContent).toContain(
+            "Used 3 study chunks from Operating Systems Notes and 1 other source"
+        );
+    });
+
+    it("does not show a source hint when turn_complete has no source_info", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "Here is a normal assistant reply without grounding metadata.",
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "Here is a normal assistant reply without grounding metadata."
+        );
+        expect(screen.queryByText(/Used study source:/i)).toBeNull();
+        expect(screen.queryByText(/Used \d+ study chunks from/i)).toBeNull();
+    });
 });

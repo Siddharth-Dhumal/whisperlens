@@ -392,3 +392,51 @@ def test_session_bind_reuses_existing_session(client: TestClient):
     assert mock_add.await_count == 2
     mock_add.assert_any_await("existing-session-abc", "user", "hello after bind", source="typed")
     mock_add.assert_any_await("existing-session-abc", "assistant", "Hello from Ollama!")
+
+def test_typed_turn_complete_includes_source_info_when_grounding_matches(client):
+    """Typed turns with study-source matches should include lightweight source info."""
+    fake = _FakeOllamaSession()
+    mock_create = AsyncMock(return_value="session-source-info")
+    mock_add = AsyncMock(return_value="msg-1")
+    mock_ground = AsyncMock(
+        return_value={
+            "prompt": "GROUND_PROMPT_FROM_LOCAL_RETRIEVAL",
+            "matches": [
+                {
+                    "document_id": "doc-1",
+                    "document_title": "Operating Systems Notes",
+                    "chunk_index": 0,
+                    "text": "A process is a program in execution.",
+                },
+                {
+                    "document_id": "doc-1",
+                    "document_title": "Operating Systems Notes",
+                    "chunk_index": 1,
+                    "text": "Threads are smaller units of execution inside a process.",
+                },
+            ],
+        }
+    )
+
+    with patch("app.main.OllamaSession", return_value=fake), \
+         patch("app.main.SpeechToTextService", return_value=_FakeStt()), \
+         patch("app.main.build_grounded_prompt_for_query", mock_ground), \
+         patch("app.main.create_session", mock_create), \
+         patch("app.main.add_message", mock_add):
+        with client.websocket_connect("/ws/live") as websocket:
+            websocket.send_text("What is a process?")
+
+            websocket.receive_json()  # transcript chunk 1
+            websocket.receive_json()  # transcript chunk 2
+
+            turn_complete = websocket.receive_json()
+            assert turn_complete["type"] == "turn_complete"
+            assert turn_complete["text"] == "Hello from Ollama!"
+            assert turn_complete["source_info"] == {
+                "matched": True,
+                "match_count": 2,
+                "source_titles": ["Operating Systems Notes"],
+            }
+
+            websocket.receive_json()  # session_created
+            websocket.receive_json()  # turn_saved

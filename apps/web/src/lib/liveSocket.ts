@@ -4,9 +4,15 @@ export type LiveSocketStatus =
     | "CONNECTED"
     | "ERROR";
 
+export type SourceInfo = {
+    matched: boolean;
+    match_count: number;
+    source_titles: string[];
+};
+
 export type LiveSocketMessage =
     | { type: "transcript"; text: string }
-    | { type: "turn_complete"; text: string }
+    | { type: "turn_complete"; text: string; source_info?: SourceInfo }
     | { type: "stt_result"; text: string }
     | { type: "session_created"; session_id: string }
     | { type: "turn_saved" }
