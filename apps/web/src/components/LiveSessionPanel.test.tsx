@@ -348,4 +348,27 @@ describe("LiveSessionPanel message handling", () => {
         // Error should be cleared
         expect(screen.queryByTestId("error-message")).toBeNull();
     });
+
+    it("shows a lightweight source hint under an assistant reply when turn_complete includes source_info", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "A process is a program in execution.",
+                source_info: {
+                    matched: true,
+                    match_count: 2,
+                    source_titles: ["Operating Systems Notes"],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain("A process is a program in execution.");
+        expect(chatLog.textContent).toContain(
+            "Used 2 study chunks from Operating Systems Notes"
+        );
+    });
 });
