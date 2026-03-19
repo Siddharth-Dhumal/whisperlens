@@ -140,4 +140,75 @@ describe("StudySources", () => {
             })
         );
     });
+
+    it("loads and shows study source detail when a source is clicked", async () => {
+        const fetchMock = vi
+            .fn()
+            // Initial GET list on mount
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify([
+                        {
+                            id: "doc-1",
+                            title: "Operating Systems Notes",
+                            source_type: "pasted_text",
+                            content: "Processes and threads",
+                            created_at: "2026-03-18T12:00:00Z",
+                            updated_at: "2026-03-18T12:00:00Z",
+                        },
+                    ]),
+                    { status: 200 }
+                )
+            )
+            // GET detail after clicking item
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        id: "doc-1",
+                        title: "Operating Systems Notes",
+                        source_type: "pasted_text",
+                        content:
+                            "A process is a program in execution. Threads are smaller units of execution inside a process.",
+                        created_at: "2026-03-18T12:00:00Z",
+                        updated_at: "2026-03-18T12:00:00Z",
+                        chunks: [
+                            {
+                                id: "chunk-1",
+                                chunk_index: 0,
+                                text: "A process is a program in execution.",
+                            },
+                            {
+                                id: "chunk-2",
+                                chunk_index: 1,
+                                text: "Threads are smaller units of execution inside a process.",
+                            },
+                        ],
+                    }),
+                    { status: 200 }
+                )
+            );
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<StudySources />);
+
+        await waitFor(() => {
+            expect(screen.getByText("Operating Systems Notes")).toBeTruthy();
+        });
+
+        fireEvent.click(screen.getByText("Operating Systems Notes"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-source-detail")).toBeTruthy();
+        });
+
+        expect(
+            screen.getByText("A process is a program in execution. Threads are smaller units of execution inside a process.")
+        ).toBeTruthy();
+
+        expect(screen.getByText("2 chunks")).toBeTruthy();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/study-sources/doc-1");
+    });
 });

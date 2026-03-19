@@ -11,6 +11,22 @@ type StudySourceSummary = {
     updated_at: string;
 };
 
+type StudySourceChunk = {
+    id?: string;
+    chunk_index: number;
+    text: string;
+};
+
+type StudySourceDetail = {
+    id: string;
+    title: string;
+    source_type: string;
+    content: string;
+    created_at: string;
+    updated_at: string;
+    chunks: StudySourceChunk[];
+};
+
 const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
@@ -23,6 +39,13 @@ export default function StudySources() {
     const [content, setContent] = useState("");
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+
+    const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+    const [selectedSource, setSelectedSource] = useState<StudySourceDetail | null>(
+        null
+    );
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState<string | null>(null);
 
     const fetchSources = useCallback(async () => {
         setLoading(true);
@@ -93,6 +116,32 @@ export default function StudySources() {
             );
         } finally {
             setSaving(false);
+        }
+    }
+
+    async function handleSelectSource(sourceId: string) {
+        setSelectedSourceId(sourceId);
+        setDetailLoading(true);
+        setDetailError(null);
+
+        try {
+            const res = await fetch(`${backendUrl}/api/study-sources/${sourceId}`, {
+                cache: "no-store",
+            });
+
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+
+            const data: StudySourceDetail = await res.json();
+            setSelectedSource(data);
+        } catch (err) {
+            setSelectedSource(null);
+            setDetailError(
+                err instanceof Error ? err.message : "Failed to load study source detail"
+            );
+        } finally {
+            setDetailLoading(false);
         }
     }
 
@@ -180,17 +229,50 @@ export default function StudySources() {
                 {!loading &&
                     !error &&
                     sources.map((source) => (
-                        <div
+                        <button
                             key={source.id}
-                            className="mt-1 rounded-lg border p-2 text-sm"
+                            type="button"
+                            onClick={() => handleSelectSource(source.id)}
+                            className={`mt-1 block w-full rounded-lg border p-2 text-left text-sm ${selectedSourceId === source.id ? "border-blue-500" : ""
+                                }`}
                             data-testid="study-source-item"
                         >
                             <div className="font-medium">{source.title}</div>
                             <div className="text-xs text-gray-500">
                                 {source.source_type} • {formatDate(source.updated_at)}
                             </div>
-                        </div>
+                        </button>
                     ))}
+            </div>
+
+            <div className="mt-4">
+                {detailLoading && (
+                    <p className="text-sm text-gray-400">Loading study source detail...</p>
+                )}
+
+                {detailError && (
+                    <p
+                        className="text-sm text-red-500"
+                        data-testid="study-source-detail-error"
+                    >
+                        {detailError}
+                    </p>
+                )}
+
+                {!detailLoading && selectedSource && (
+                    <div
+                        className="rounded-lg border p-3 text-sm"
+                        data-testid="study-source-detail"
+                    >
+                        <div className="font-semibold">{selectedSource.title}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                            {selectedSource.chunks.length} chunks
+                        </div>
+                        <div className="mt-3 whitespace-pre-wrap">
+                            {selectedSource.content}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
