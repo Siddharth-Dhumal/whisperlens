@@ -181,11 +181,8 @@ async def _handle_ollama_turn(
     websocket: WebSocket,
     session: OllamaSession,
     user_text: str,
+    source_info: dict | None = None,
 ) -> str:
-    """Send user_text through the Ollama chat and stream the response.
-
-    Returns the full assistant response text.
-    """
     await session.send_text(user_text)
 
     full_response = ""
@@ -198,13 +195,15 @@ async def _handle_ollama_turn(
             }
         )
 
-    await websocket.send_json(
-        {
-            "type": "turn_complete",
-            "text": full_response,
-        }
-    )
+    turn_complete_payload = {
+        "type": "turn_complete",
+        "text": full_response,
+    }
 
+    if source_info is not None:
+        turn_complete_payload["source_info"] = source_info
+
+    await websocket.send_json(turn_complete_payload)
     return full_response
 
 
@@ -321,11 +320,25 @@ async def live_websocket(websocket: WebSocket) -> None:
 
                     grounding = await build_grounded_prompt_for_query(text)
                     grounded_prompt = grounding["prompt"]
+                    matches = grounding["matches"]
+
+                    source_titles: list[str] = []
+                    for match in matches:
+                        title = str(match["document_title"]).strip()
+                        if title and title not in source_titles:
+                            source_titles.append(title)
+
+                    source_info = {
+                        "matched": len(matches) > 0,
+                        "match_count": len(matches),
+                        "source_titles": source_titles,
+                    }
 
                     response = await _handle_ollama_turn(
                         websocket,
                         ollama,
                         grounded_prompt,
+                        source_info=source_info,
                     )
 
                     # Persist the raw typed turn, not the grounded prompt
