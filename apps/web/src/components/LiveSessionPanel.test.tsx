@@ -395,4 +395,29 @@ describe("LiveSessionPanel message handling", () => {
         expect(screen.queryByText(/Used study source:/i)).toBeNull();
         expect(screen.queryByText(/Used \d+ study chunks from/i)).toBeNull();
     });
+
+    it("shows a compact multi-source hint when matches come from more than one study source", () => {
+        renderAndConnect();
+
+        act(() => {
+            capturedOnMessage?.({
+                type: "turn_complete",
+                text: "Processes and threads are related but not the same.",
+                source_info: {
+                    matched: true,
+                    match_count: 3,
+                    source_titles: ["Operating Systems Notes", "Concurrency Notes"],
+                },
+            });
+        });
+
+        const chatLog = screen.getByTestId("chat-log");
+
+        expect(chatLog.textContent).toContain(
+            "Processes and threads are related but not the same."
+        );
+        expect(chatLog.textContent).toContain(
+            "Used 3 study chunks from Operating Systems Notes and 1 other source"
+        );
+    });
 });

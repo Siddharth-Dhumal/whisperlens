@@ -39,7 +39,16 @@ function buildSourceHint(sourceInfo?: SourceInfo): string | null {
     return `Used study source: ${firstTitle}`;
   }
 
-  return `Used ${sourceInfo.match_count} study chunks from ${firstTitle}`;
+  const additionalSourceCount = Math.max(sourceInfo.source_titles.length - 1, 0);
+
+  if (additionalSourceCount === 0) {
+    return `Used ${sourceInfo.match_count} study chunks from ${firstTitle}`;
+  }
+
+  const sourceLabel =
+    additionalSourceCount === 1 ? "other source" : "other sources";
+
+  return `Used ${sourceInfo.match_count} study chunks from ${firstTitle} and ${additionalSourceCount} ${sourceLabel}`;
 }
 
 export default function LiveSessionPanel({ onTurnSaved }: Props) {
