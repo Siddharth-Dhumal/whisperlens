@@ -186,3 +186,111 @@ def test_search_study_sources_rejects_invalid_limit():
     response = client.get("/api/study-sources/search", params={"q": "matrix", "limit": 0})
     assert response.status_code == 400
     assert response.json()["detail"] == "limit must be at least 1"
+
+def test_upload_study_source_txt_success():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-sources/upload",
+        files={
+            "file": (
+                "os-notes.txt",
+                b"Processes are programs in execution.\n\nThreads share memory.",
+                "text/plain",
+            )
+        },
+        data={
+            "title": "Operating Systems Notes",
+            "max_chars": "120",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert "document_id" in body
+    assert body["chunk_count"] >= 1
+
+    detail_response = client.get(f"/api/study-sources/{body['document_id']}")
+    assert detail_response.status_code == 200
+
+    detail = detail_response.json()
+    assert detail["title"] == "Operating Systems Notes"
+    assert detail["source_type"] == "local_file"
+    assert "Processes are programs in execution." in detail["content"]
+
+
+def test_upload_study_source_derives_title_from_filename():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-sources/upload",
+        files={
+            "file": (
+                "lecture-notes.md",
+                b"# Scheduling\n\nRound-robin gives each process a time slice.",
+                "text/markdown",
+            )
+        },
+        data={
+            "max_chars": "120",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert "document_id" in body
+    assert body["chunk_count"] >= 1
+
+    detail_response = client.get(f"/api/study-sources/{body['document_id']}")
+    assert detail_response.status_code == 200
+
+    detail = detail_response.json()
+    assert detail["title"] == "lecture-notes"
+    assert detail["source_type"] == "local_file"
+    assert "Round-robin" in detail["content"]
+
+
+def test_upload_study_source_rejects_unsupported_file_type():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-sources/upload",
+        files={
+            "file": (
+                "notes.pdf",
+                b"%PDF-1.4 fake pdf bytes",
+                "application/pdf",
+            )
+        },
+        data={
+            "title": "Bad Upload",
+            "max_chars": "120",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only .txt and .md files are supported right now"
+
+
+def test_upload_study_source_rejects_empty_file():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-sources/upload",
+        files={
+            "file": (
+                "empty.txt",
+                b"",
+                "text/plain",
+            )
+        },
+        data={
+            "title": "Empty Notes",
+            "max_chars": "120",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "uploaded file is empty"

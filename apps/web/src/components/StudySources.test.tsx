@@ -349,17 +349,19 @@ describe("StudySources", () => {
         });
 
         expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/study-sources/upload");
 
         const postOptions = fetchMock.mock.calls[1]?.[1] as RequestInit;
         expect(postOptions.method).toBe("POST");
-        expect(postOptions.body).toBe(
-            JSON.stringify({
-                title: "Custom OS Notes",
-                source_type: "local_file",
-                content: "# Processes\nA process is a program in execution.",
-                max_chars: 800,
-            })
-        );
+
+        const formData = postOptions.body as FormData;
+        expect(formData).toBeInstanceOf(FormData);
+        expect(formData.get("title")).toBe("Custom OS Notes");
+        expect(formData.get("max_chars")).toBe("800");
+
+        const uploadedFile = formData.get("file");
+        expect(uploadedFile).toBeInstanceOf(File);
+        expect((uploadedFile as File).name).toBe("lecture-notes.md");
     });
 
     it("searches study sources and opens source detail from a search result", async () => {

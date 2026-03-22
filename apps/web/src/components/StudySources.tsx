@@ -83,6 +83,9 @@ export default function StudySources() {
     const [searchError, setSearchError] = useState<string | null>(null);
     const [searchResults, setSearchResults] = useState<StudySourceSearchResult[]>([]);
 
+    const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
+    const [importedContentSnapshot, setImportedContentSnapshot] = useState<string | null>(null);
+
     const fetchSources = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -134,6 +137,8 @@ export default function StudySources() {
             }
 
             setContent(fileText);
+            setSelectedUploadFile(file);
+            setImportedContentSnapshot(fileText);
 
             if (!title.trim()) {
                 setTitle(getBaseFileName(file.name));
@@ -166,18 +171,37 @@ export default function StudySources() {
         setSaveError(null);
 
         try {
-            const res = await fetch(`${backendUrl}/api/study-sources`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    title: cleanTitle,
-                    source_type: importedFileName ? "local_file" : "pasted_text",
-                    content: cleanContent,
-                    max_chars: 800,
-                }),
-            });
+            const importedContentWasNotEdited =
+                selectedUploadFile !== null &&
+                importedContentSnapshot !== null &&
+                cleanContent === importedContentSnapshot.trim();
+
+            let res: Response;
+
+            if (importedContentWasNotEdited && selectedUploadFile) {
+                const formData = new FormData();
+                formData.append("file", selectedUploadFile);
+                formData.append("title", cleanTitle);
+                formData.append("max_chars", "800");
+
+                res = await fetch(`${backendUrl}/api/study-sources/upload`, {
+                    method: "POST",
+                    body: formData,
+                });
+            } else {
+                res = await fetch(`${backendUrl}/api/study-sources`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        title: cleanTitle,
+                        source_type: selectedUploadFile ? "local_file" : "pasted_text",
+                        content: cleanContent,
+                        max_chars: 800,
+                    }),
+                });
+            }
 
             if (!res.ok) {
                 throw new Error(`HTTP ${res.status}`);
@@ -186,6 +210,8 @@ export default function StudySources() {
             setTitle("");
             setContent("");
             setImportedFileName(null);
+            setSelectedUploadFile(null);
+            setImportedContentSnapshot(null);
             await fetchSources();
         } catch (err) {
             setSaveError(
