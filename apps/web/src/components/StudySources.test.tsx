@@ -361,4 +361,173 @@ describe("StudySources", () => {
             })
         );
     });
+
+    it("searches study sources and opens source detail from a search result", async () => {
+        const fetchMock = vi
+            .fn()
+            // Initial GET on mount
+            .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+            // Search request
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify([
+                        {
+                            chunk_id: 11,
+                            document_id: "doc-1",
+                            document_title: "Operating Systems Notes",
+                            chunk_index: 0,
+                            content: "A process is a program in execution.",
+                        },
+                    ]),
+                    { status: 200 }
+                )
+            )
+            // Detail request after clicking the search result
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        id: "doc-1",
+                        title: "Operating Systems Notes",
+                        source_type: "local_file",
+                        content: "A process is a program in execution.",
+                        created_at: "2026-03-18T12:00:00Z",
+                        updated_at: "2026-03-18T12:00:00Z",
+                        chunks: [
+                            {
+                                chunk_index: 0,
+                                text: "A process is a program in execution.",
+                            },
+                        ],
+                    }),
+                    { status: 200 }
+                )
+            );
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<StudySources />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-sources-empty")).toBeTruthy();
+        });
+
+        fireEvent.change(screen.getByTestId("study-source-search-input"), {
+            target: { value: "process" },
+        });
+
+        fireEvent.click(screen.getByTestId("study-source-search-button"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-source-search-results")).toBeTruthy();
+        });
+
+        expect(screen.getByText("Operating Systems Notes")).toBeTruthy();
+        expect(screen.getByText("Chunk 1")).toBeTruthy();
+        expect(
+            screen.getByText("A process is a program in execution.")
+        ).toBeTruthy();
+
+        fireEvent.click(screen.getByTestId("study-source-search-result"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-source-detail")).toBeTruthy();
+        });
+
+        expect(screen.getByTestId("study-source-detail").textContent).toContain(
+            "Operating Systems Notes"
+        );
+        expect(screen.getByTestId("study-source-detail").textContent).toContain(
+            "1 chunks"
+        );
+
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock.mock.calls[1]?.[0]).toContain(
+            "/api/study-sources/search?q=process"
+        );
+        expect(fetchMock.mock.calls[2]?.[0]).toContain("/api/study-sources/doc-1");
+    });
+
+    it("shows empty search state and clear resets the search UI", async () => {
+        const fetchMock = vi
+            .fn()
+            // Initial GET on mount
+            .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+            // Search request with no results
+            .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<StudySources />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-sources-empty")).toBeTruthy();
+        });
+
+        const searchInput = screen.getByTestId(
+            "study-source-search-input"
+        ) as HTMLInputElement;
+
+        fireEvent.change(searchInput, {
+            target: { value: "virtual memory" },
+        });
+
+        fireEvent.click(screen.getByTestId("study-source-search-button"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-source-search-empty")).toBeTruthy();
+        });
+
+        expect(screen.getByTestId("study-source-search-empty").textContent).toContain(
+            "No matching study chunks found."
+        );
+
+        fireEvent.click(screen.getByTestId("study-source-search-clear-button"));
+
+        expect(searchInput.value).toBe("");
+        expect(screen.queryByTestId("study-source-search-empty")).toBeNull();
+        expect(screen.queryByTestId("study-source-search-results")).toBeNull();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1]?.[0]).toContain(
+            "/api/study-sources/search?q=virtual%20memory"
+        );
+    });
+
+    it("shows a search error when study-source search fails", async () => {
+        const fetchMock = vi
+            .fn()
+            // Initial GET on mount
+            .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+            // Search request fails
+            .mockResolvedValueOnce(new Response("server error", { status: 500 }));
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<StudySources />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-sources-empty")).toBeTruthy();
+        });
+
+        fireEvent.change(screen.getByTestId("study-source-search-input"), {
+            target: { value: "paging" },
+        });
+
+        fireEvent.click(screen.getByTestId("study-source-search-button"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("study-source-search-error")).toBeTruthy();
+        });
+
+        expect(screen.getByTestId("study-source-search-error").textContent).toContain(
+            "HTTP 500"
+        );
+        expect(screen.queryByTestId("study-source-search-results")).toBeNull();
+        expect(screen.queryByTestId("study-source-search-empty")).toBeNull();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1]?.[0]).toContain(
+            "/api/study-sources/search?q=paging"
+        );
+    });
 });
