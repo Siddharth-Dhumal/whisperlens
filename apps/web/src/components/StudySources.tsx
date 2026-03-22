@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 
 type StudySourceSummary = {
     id: string;
@@ -30,6 +30,25 @@ type StudySourceDetail = {
 const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
+function getBaseFileName(fileName: string): string {
+    const trimmed = fileName.trim();
+    if (!trimmed) {
+        return "";
+    }
+
+    const lastDotIndex = trimmed.lastIndexOf(".");
+    if (lastDotIndex <= 0) {
+        return trimmed;
+    }
+
+    return trimmed.slice(0, lastDotIndex);
+}
+
+function isSupportedStudyFile(file: File): boolean {
+    const lowerName = file.name.toLowerCase();
+    return lowerName.endsWith(".txt") || lowerName.endsWith(".md");
+}
+
 export default function StudySources() {
     const [sources, setSources] = useState<StudySourceSummary[]>([]);
     const [loading, setLoading] = useState(true);
@@ -39,6 +58,10 @@ export default function StudySources() {
     const [content, setContent] = useState("");
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+
+    const [importingFile, setImportingFile] = useState(false);
+    const [importError, setImportError] = useState<string | null>(null);
+    const [importedFileName, setImportedFileName] = useState<string | null>(null);
 
     const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
     const [selectedSource, setSelectedSource] = useState<StudySourceDetail | null>(
@@ -75,6 +98,46 @@ export default function StudySources() {
         fetchSources();
     }, [fetchSources]);
 
+    async function handleFileImport(event: ChangeEvent<HTMLInputElement>) {
+        const file = event.target.files?.[0];
+
+        if (!file) {
+            return;
+        }
+
+        setImportingFile(true);
+        setImportError(null);
+
+        try {
+            if (!isSupportedStudyFile(file)) {
+                throw new Error("Only .txt and .md files are supported right now.");
+            }
+
+            const fileText = await file.text();
+            const cleanFileText = fileText.trim();
+
+            if (!cleanFileText) {
+                throw new Error("The selected file is empty.");
+            }
+
+            setContent(fileText);
+
+            if (!title.trim()) {
+                setTitle(getBaseFileName(file.name));
+            }
+
+            setImportedFileName(file.name);
+            setSaveError(null);
+        } catch (err) {
+            setImportError(
+                err instanceof Error ? err.message : "Failed to import file"
+            );
+        } finally {
+            setImportingFile(false);
+            event.target.value = "";
+        }
+    }
+
     async function handleSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
@@ -97,7 +160,7 @@ export default function StudySources() {
                 },
                 body: JSON.stringify({
                     title: cleanTitle,
-                    source_type: "pasted_text",
+                    source_type: importedFileName ? "local_file" : "pasted_text",
                     content: cleanContent,
                     max_chars: 800,
                 }),
@@ -109,6 +172,7 @@ export default function StudySources() {
 
             setTitle("");
             setContent("");
+            setImportedFileName(null);
             await fetchSources();
         } catch (err) {
             setSaveError(
@@ -177,6 +241,48 @@ export default function StudySources() {
                     data-testid="study-source-title-input"
                 />
 
+                <div className="space-y-2">
+                    <label
+                        htmlFor="study-source-file-input"
+                        className="block text-sm font-medium"
+                    >
+                        Import local text file
+                    </label>
+
+                    <input
+                        id="study-source-file-input"
+                        type="file"
+                        accept=".txt,.md,text/plain,text/markdown"
+                        onChange={handleFileImport}
+                        disabled={importingFile || saving}
+                        className="block w-full text-sm"
+                        data-testid="study-source-file-input"
+                    />
+
+                    <p className="text-xs text-gray-500">
+                        Supports .txt and .md for now. The file is read locally in your
+                        browser, then you can review or edit it before saving.
+                    </p>
+
+                    {importedFileName && (
+                        <p
+                            className="text-xs text-gray-500"
+                            data-testid="study-source-imported-file"
+                        >
+                            Imported file: {importedFileName}
+                        </p>
+                    )}
+
+                    {importError && (
+                        <p
+                            className="text-sm text-red-500"
+                            data-testid="study-source-import-error"
+                        >
+                            {importError}
+                        </p>
+                    )}
+                </div>
+
                 <textarea
                     value={content}
                     onChange={(event) => setContent(event.target.value)}
@@ -188,7 +294,7 @@ export default function StudySources() {
                 <div className="flex items-center gap-3">
                     <button
                         type="submit"
-                        disabled={saving}
+                        disabled={saving || importingFile}
                         className="rounded-lg border px-3 py-2 text-sm"
                         data-testid="study-source-save-button"
                     >
