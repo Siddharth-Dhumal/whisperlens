@@ -150,7 +150,7 @@ def test_typed_text_uses_grounded_prompt_but_persists_raw_user_text(client: Test
 
 
 def test_audio_lifecycle_round_trip(client: TestClient):
-    """audio_start → binary → audio_end should produce stt_result + Ollama response."""
+    """audio_start → binary → audio_end should produce stt_result + grounded Ollama response."""
     fake_ollama = _FakeOllamaSession()
     fake_stt = _FakeStt(transcript="hello from voice")
 
@@ -177,8 +177,26 @@ def test_audio_lifecycle_round_trip(client: TestClient):
             r4 = websocket.receive_json()
             assert r4["type"] == "turn_complete"
             assert r4["text"] == "Hello from Ollama!"
+            assert r4["source_info"] == {
+                "matched": False,
+                "match_count": 0,
+                "source_titles": [],
+            }
 
-        fake_ollama.send_text.assert_awaited_once_with("hello from voice")
+            r5 = websocket.receive_json()
+            assert r5["type"] == "session_created"
+
+            r6 = websocket.receive_json()
+            assert r6["type"] == "turn_saved"
+
+        fake_ollama.send_text.assert_awaited_once_with(
+            "You are WhisperLens, a local-first study assistant.\n"
+            "No matching study-source context was found for this turn.\n"
+            "Do not rely on study-source context from earlier turns when answering this question.\n"
+            "Answer normally and be clear about the absence of relevant study-note context.\n\n"
+            "User question:\n"
+            "hello from voice"
+        )
 
 
 def test_audio_end_without_data_returns_error(client: TestClient):
@@ -227,11 +245,24 @@ def test_audio_end_without_audio_start_returns_error(client: TestClient):
             assert r1["type"] == "error"
             assert "No audio data" in r1["message"]
 
-def test_voice_path_does_not_use_grounding(client: TestClient):
-    """Voice turns should continue to bypass study-source grounding."""
+def test_voice_path_uses_grounding(client: TestClient):
+    """Voice turns should now use study-source grounding before calling Ollama."""
     fake_ollama = _FakeOllamaSession()
     fake_stt = _FakeStt(transcript="hello from voice")
-    mock_ground = AsyncMock()
+    mock_ground = AsyncMock(
+        return_value={
+            "prompt": "VOICE_GROUNDED_PROMPT",
+            "matches": [
+                {
+                    "chunk_id": 1,
+                    "document_id": 10,
+                    "document_title": "Operating Systems Notes",
+                    "chunk_index": 0,
+                    "content": "A process is a program in execution.",
+                }
+            ],
+        }
+    )
 
     with patch("app.main.OllamaSession", return_value=fake_ollama), \
          patch("app.main.SpeechToTextService", return_value=fake_stt), \
@@ -241,15 +272,27 @@ def test_voice_path_does_not_use_grounding(client: TestClient):
             websocket.send_bytes(b"\x00\x01\x02\x03")
             websocket.send_text(json.dumps({"type": "audio_end"}))
 
-            websocket.receive_json()  # stt_result
+            r1 = websocket.receive_json()
+            assert r1["type"] == "stt_result"
+            assert r1["text"] == "hello from voice"
+
             websocket.receive_json()  # transcript chunk 1
             websocket.receive_json()  # transcript chunk 2
-            websocket.receive_json()  # turn_complete
+
+            turn_complete = websocket.receive_json()
+            assert turn_complete["type"] == "turn_complete"
+            assert turn_complete["text"] == "Hello from Ollama!"
+            assert turn_complete["source_info"] == {
+                "matched": True,
+                "match_count": 1,
+                "source_titles": ["Operating Systems Notes"],
+            }
+
             websocket.receive_json()  # session_created
             websocket.receive_json()  # turn_saved
 
-    mock_ground.assert_not_awaited()
-    fake_ollama.send_text.assert_awaited_once_with("hello from voice")
+    mock_ground.assert_awaited_once_with("hello from voice")
+    fake_ollama.send_text.assert_awaited_once_with("VOICE_GROUNDED_PROMPT")
 
 
 # ------------------------------------------------------------------

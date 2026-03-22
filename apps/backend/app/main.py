@@ -175,7 +175,20 @@ async def api_get_study_source(document_id: str) -> dict:
 # ------------------------------------------------------------------
 # WebSocket
 # ------------------------------------------------------------------
+def _build_source_info_from_matches(matches: list[dict]) -> dict:
+    """Build lightweight source attribution metadata from grounding matches."""
+    source_titles: list[str] = []
 
+    for match in matches:
+        title = str(match["document_title"]).strip()
+        if title and title not in source_titles:
+            source_titles.append(title)
+
+    return {
+        "matched": len(matches) > 0,
+        "match_count": len(matches),
+        "source_titles": source_titles,
+    }
 
 async def _handle_ollama_turn(
     websocket: WebSocket,
@@ -303,7 +316,18 @@ async def live_websocket(websocket: WebSocket) -> None:
                             )
 
                             # Feed into Ollama chat
-                            response = await _handle_ollama_turn(websocket, ollama, transcript)
+                            grounding = await build_grounded_prompt_for_query(transcript)
+                            grounded_prompt = grounding["prompt"]
+                            matches = grounding["matches"]
+                            source_info = _build_source_info_from_matches(matches)
+
+                            # Feed grounded voice transcript into Ollama chat
+                            response = await _handle_ollama_turn(
+                                websocket,
+                                ollama,
+                                grounded_prompt,
+                                source_info=source_info,
+                            )
 
                             # Persist the turn
                             if db_session_id is None:
@@ -321,18 +345,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                     grounding = await build_grounded_prompt_for_query(text)
                     grounded_prompt = grounding["prompt"]
                     matches = grounding["matches"]
-
-                    source_titles: list[str] = []
-                    for match in matches:
-                        title = str(match["document_title"]).strip()
-                        if title and title not in source_titles:
-                            source_titles.append(title)
-
-                    source_info = {
-                        "matched": len(matches) > 0,
-                        "match_count": len(matches),
-                        "source_titles": source_titles,
-                    }
+                    source_info = _build_source_info_from_matches(matches)
 
                     response = await _handle_ollama_turn(
                         websocket,
