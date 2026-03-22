@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -46,6 +47,35 @@ class StudySourceCreateRequest(BaseModel):
     source_type: str = "pasted_text"
     content: str
     max_chars: int = 800
+
+def _get_upload_title(filename: str | None, title: str | None) -> str:
+    """Prefer explicit title, otherwise derive one from the uploaded filename."""
+    clean_title = (title or "").strip()
+    if clean_title:
+        return clean_title
+
+    clean_filename = (filename or "").strip()
+    if not clean_filename:
+        raise ValueError("title is required when filename is missing")
+
+    derived_title = Path(clean_filename).stem.strip()
+    if not derived_title:
+        raise ValueError("could not derive title from uploaded filename")
+
+    return derived_title
+
+
+def _validate_upload_filename(filename: str | None) -> str:
+    """Allow only local text-based study files for now."""
+    clean_filename = (filename or "").strip()
+    if not clean_filename:
+        raise ValueError("uploaded file must have a filename")
+
+    suffix = Path(clean_filename).suffix.lower()
+    if suffix not in {".txt", ".md"}:
+        raise ValueError("only .txt and .md files are supported right now")
+
+    return clean_filename
 
 # ------------------------------------------------------------------
 # Study Vault REST API
@@ -146,6 +176,40 @@ async def create_study_source(payload: StudySourceCreateRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+@app.post("/api/study-sources/upload")
+async def upload_study_source(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    max_chars: int = Form(800),
+) -> dict:
+    """Upload a local text or markdown file and ingest it as a study source."""
+    try:
+        filename = _validate_upload_filename(file.filename)
+        resolved_title = _get_upload_title(filename, title)
+
+        raw_bytes = await file.read()
+        if not raw_bytes:
+            raise ValueError("uploaded file is empty")
+
+        try:
+            content = raw_bytes.decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise ValueError("uploaded file must be valid UTF-8 text") from exc
+
+        if not content:
+            raise ValueError("uploaded file is empty")
+
+        return await ingest_document(
+            title=resolved_title,
+            source_type="local_file",
+            content=content,
+            max_chars=max_chars,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
 
 @app.get("/api/study-sources")
 async def api_list_study_sources() -> list[dict]:
@@ -175,7 +239,20 @@ async def api_get_study_source(document_id: str) -> dict:
 # ------------------------------------------------------------------
 # WebSocket
 # ------------------------------------------------------------------
+def _build_source_info_from_matches(matches: list[dict]) -> dict:
+    """Build lightweight source attribution metadata from grounding matches."""
+    source_titles: list[str] = []
 
+    for match in matches:
+        title = str(match["document_title"]).strip()
+        if title and title not in source_titles:
+            source_titles.append(title)
+
+    return {
+        "matched": len(matches) > 0,
+        "match_count": len(matches),
+        "source_titles": source_titles,
+    }
 
 async def _handle_ollama_turn(
     websocket: WebSocket,
@@ -303,7 +380,18 @@ async def live_websocket(websocket: WebSocket) -> None:
                             )
 
                             # Feed into Ollama chat
-                            response = await _handle_ollama_turn(websocket, ollama, transcript)
+                            grounding = await build_grounded_prompt_for_query(transcript)
+                            grounded_prompt = grounding["prompt"]
+                            matches = grounding["matches"]
+                            source_info = _build_source_info_from_matches(matches)
+
+                            # Feed grounded voice transcript into Ollama chat
+                            response = await _handle_ollama_turn(
+                                websocket,
+                                ollama,
+                                grounded_prompt,
+                                source_info=source_info,
+                            )
 
                             # Persist the turn
                             if db_session_id is None:
@@ -321,18 +409,7 @@ async def live_websocket(websocket: WebSocket) -> None:
                     grounding = await build_grounded_prompt_for_query(text)
                     grounded_prompt = grounding["prompt"]
                     matches = grounding["matches"]
-
-                    source_titles: list[str] = []
-                    for match in matches:
-                        title = str(match["document_title"]).strip()
-                        if title and title not in source_titles:
-                            source_titles.append(title)
-
-                    source_info = {
-                        "matched": len(matches) > 0,
-                        "match_count": len(matches),
-                        "source_titles": source_titles,
-                    }
+                    source_info = _build_source_info_from_matches(matches)
 
                     response = await _handle_ollama_turn(
                         websocket,

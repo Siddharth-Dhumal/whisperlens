@@ -6,3 +6,4 @@ python-dotenv
 pydantic-settings
 faster-whisper
 aiosqlite
+python-multipart==0.0.22
