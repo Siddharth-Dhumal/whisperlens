@@ -1,408 +1,255 @@
-# WhisperLens Spec
+# WhisperLens Product and Engineering Spec
 
-## 1. Product Identity
+## 1. Product identity
 
 WhisperLens is a local-first AI study assistant.
 
+It is designed to make local AI workflows feel useful and polished without depending on paid APIs or a hosted backend.
+
 The product helps a student:
-- chat by text
-- chat by voice
-- use lightweight snapshot-based vision
-- save conversations locally
-- add local study materials
-- retrieve relevant study context from those materials
-- ground assistant answers with local study sources
-- see lightweight source hints under grounded replies
+- ask questions by text
+- ask questions by voice
+- use a quick camera snapshot for visual questions
+- build a personal study-source library
+- search local study materials
+- receive grounded answers with lightweight source hints
+- reopen prior sessions from a persistent local history
 
----
+## 2. Product goals
 
-## 2. Core Product Goals
+Primary goals:
+1. deliver a polished MVP experience for local study workflows
+2. keep the main runtime path local-first and low-cost
+3. support typed and voice conversation in a single live workspace
+4. support lightweight vision through snapshot capture
+5. let users create and search a local study-source vault
+6. preserve conversation history locally for later review
 
-The main product goals are:
+## 3. Non-goals for the current baseline
 
-1. Provide a polished local AI study assistant experience.
-2. Keep the runtime path local-first and free.
-3. Support typed and voice conversation with preserved session continuity.
-4. Let users build a local study-source vault.
-5. Use local retrieval to ground answers from study materials.
-6. Show lightweight source attribution without overcomplicating the UI.
+The current project does not try to be:
+- a hosted multi-user SaaS product
+- a full document management system
+- a large-scale RAG platform with embeddings and vector databases
+- a production deployment platform with auth, billing, and monitoring
 
----
+## 4. Current user-facing surfaces
 
-## 3. Current Tech Stack
+The merged MVP has five primary surfaces:
 
-### Frontend
-- Next.js
-- React
+### 4.1 Live workspace
+The main surface for typed chat, voice input, and camera snapshot interaction.
+
+### 4.2 Study Vault sidebar
+Lists saved sessions and lets the user reopen prior conversations.
+
+### 4.3 Session detail view
+Shows the contents of a saved session and supports continuing prior work.
+
+### 4.4 Study Sources sidebar
+Lists saved study sources and provides entry to create a new source.
+
+### 4.5 Source detail / create source view
+Used for viewing one source, seeing its chunks, searching local study content, and creating new sources.
+
+## 5. Product behavior
+
+### 5.1 Typed chat
+Current behavior:
+- user sends a typed message over WebSocket
+- backend searches local study sources for relevant chunks
+- backend builds a grounded prompt when matches exist
+- Ollama generates the assistant response
+- assistant response streams back to the frontend
+- turn metadata can include source attribution
+- the raw user message is what gets persisted
+
+### 5.2 Voice chat
+Current behavior:
+- frontend records audio and streams chunks
+- backend buffers audio and runs speech-to-text with faster-whisper
+- transcript is returned to the frontend
+- transcript follows the same local grounding path as typed chat
+- assistant response streams back
+- raw spoken transcript is what gets persisted
+
+### 5.3 Vision flow
+Current behavior:
+- user opens the camera popup
+- browser permission is requested if needed
+- live preview appears in the popup
+- user captures a snapshot
+- frontend submits the image to the backend vision endpoint
+- Ollama-based vision returns the answer
+- the vision turn is persisted
+
+### 5.4 Study source creation
+Current behavior:
+- user can create a source from pasted text
+- user can import `.txt` and `.md` files
+- title may be entered manually or derived from file name
+- content is chunked deterministically on ingest
+- new sources appear in the sidebar after creation
+
+### 5.5 Study source search
+Current behavior:
+- backend uses SQLite FTS5 over persisted chunks
+- frontend shows matching results with document title and chunk number
+- source detail shows both full content and chunk list
+
+### 5.6 Session history
+Current behavior:
+- sessions are stored in SQLite
+- messages are stored with role, source, and created timestamp
+- Study Vault lists saved sessions
+- session detail allows users to inspect prior work
+
+## 6. Technical architecture
+
+### 6.1 Frontend
+Stack:
+- Next.js 16
+- React 19
 - TypeScript
 
-### Backend
+Main UI responsibilities:
+- render the sidebar + main workspace layout
+- manage WebSocket interaction state
+- manage audio and camera browser APIs
+- render session and source detail views
+- call REST endpoints for source and session data
+
+Important frontend components:
+- `LiveSessionPanel`
+- `StudyVault`
+- `StudySources`
+- `SessionDetailPanel`
+- `SourceDetailPanel`
+
+### 6.2 Backend
+Stack:
 - FastAPI
 - Python
+- aiosqlite
 
-### Transport
-- WebSockets for live chat
-
-### Local Model Runtime
-- Ollama
-
-### Local Speech-to-Text
-- faster-whisper
-
-### Persistence
-- SQLite
-
-### Vision
-- local snapshot-based vision through Ollama
-
----
-
-## 4. High-Level Architecture
-
-WhisperLens has four major product surfaces:
-
-1. Live chat surface
-2. Study Sources surface
-3. Study Vault surface
-4. Backend status / system health surface
-
-The architecture is local-first:
-
-- frontend talks to backend
-- backend owns session logic, persistence, ingestion, retrieval, and websocket orchestration
-- Ollama handles text and vision model inference locally
-- faster-whisper handles speech-to-text locally
-- SQLite stores sessions, messages, study documents, and study chunks locally
-
----
-
-## 5. Frontend Architecture
-
-Main frontend page currently mounts these major panels:
-
-- `BackendStatus`
-- `LiveSessionPanel`
-- `StudySources`
-- `StudyVault`
-
-### 5.1 BackendStatus
-Purpose:
-- show whether the backend is reachable
-- give quick system-level confidence during development and demos
-
-### 5.2 LiveSessionPanel
-Purpose:
-- main user chat interface
-- supports typed chat
-- supports voice chat
-- supports vision-triggered interaction path
-- shows assistant messages
-- shows lightweight source hints when `turn_complete.source_info` is present and matched
-
-Important behavior:
-- source hint rendering is generic
-- it now works for both typed and voice grounded turns
-- no hint appears when there is no match or no `source_info`
-
-### 5.3 StudySources
-Purpose:
-- create and inspect local study sources
-- search local study chunks
-- import local text-based study files
-
-Current capabilities:
-- create source from pasted text
-- import `.txt`
-- import `.md`
-- auto-fill title from file name when title is blank
-- preserve user-entered title if already typed
-- review and edit imported content before saving
-- search local study chunks using backend search
-- click a search result to open full source detail
-- show full content and chunk count
-- list all saved sources
-- refresh the list manually
-
-Current file-save behavior:
-- pasted text saves as `pasted_text`
-- imported file with unchanged content saves through backend multipart upload
-- imported file that was edited before save falls back to JSON create flow
-- edited imported file still saves as `local_file`
-
-### 5.4 StudyVault
-Purpose:
-- show saved conversation history
-- preserve chat continuity across turns
-- allow session review
-
-Important current behavior:
-- text, voice, and vision turns persist into Study Vault
-- Study Vault auto-refresh behavior exists after saved turns
-- open Study Vault detail can auto-refresh
-
----
-
-## 6. Backend Architecture
-
-Key backend responsibilities:
-
-- websocket live session orchestration
-- session creation and message persistence
-- local study-source ingestion
-- deterministic chunking
-- FTS search over study-source chunks
-- grounding prompts for supported chat paths
-- packaging lightweight source attribution metadata
-- REST API for study-source CRUD-lite flows
+Main backend responsibilities:
+- expose REST endpoints
+- host the `/ws/live` WebSocket
+- orchestrate live typed and voice turns
+- perform source ingestion and search
+- persist sessions and messages
+- package source attribution metadata
+- handle snapshot-based vision requests
 
 Important backend modules:
+- `app/main.py`
+- `app/db.py`
+- `app/study_sources.py`
+- `app/chat_grounding.py`
+- `app/stt.py`
+- `app/vision.py`
+- `app/ollama_live.py`
+- `app/settings.py`
 
-### 6.1 `app/main.py`
-Main application entry point.
+### 6.3 Local model runtime
+- Ollama for text generation
+- Ollama for vision analysis
+- faster-whisper for speech-to-text
 
-Responsibilities:
-- FastAPI app setup
-- websocket live session handler
-- REST endpoints
-- typed chat flow
-- voice chat flow
-- vision-related request flow
-- source attribution packaging
-- study-source upload endpoint
+### 6.4 Persistence and retrieval
+- SQLite for sessions, messages, documents, and chunks
+- SQLite FTS5 for keyword-based local retrieval
 
-### 6.2 `app/db.py`
-Responsibilities:
-- SQLite schema creation
-- sessions/messages persistence
-- study document storage
-- study chunk storage
-- FTS search support
-- list/get/search helpers for study sources
+## 7. Data model summary
 
-### 6.3 `app/study_sources.py`
-Responsibilities:
-- deterministic text chunking
-- ingest document flow
-- handoff from raw content to persisted document + chunks
+### 7.1 Sessions
+Core table: `sessions`
+- `id`
+- `title`
+- `created_at`
+- `updated_at`
 
-### 6.4 `app/chat_grounding.py`
-Responsibilities:
-- query the local study-source search layer
-- build a grounded prompt for the current user question
-- keep no-match behavior turn-scoped
-- return matches for source attribution
+### 7.2 Messages
+Core table: `messages`
+- `id`
+- `session_id`
+- `role`
+- `text`
+- `source`
+- `created_at`
 
----
-
-## 7. Persistence Model
-
-### 7.1 Conversation Persistence
-The backend persists conversation turns in SQLite.
-
-Important product rule:
-- the raw user input is stored
-- internal grounded prompts are not stored as the visible user message
-
-This keeps the Study Vault faithful to the real user interaction.
-
-### 7.2 Study Source Persistence
-Study sources use these core tables:
-
+### 7.3 Study sources
+Core tables:
 - `documents`
 - `document_chunks`
 - `document_chunks_fts`
 
-Important details:
-- FTS5 is used for local retrieval
-- triggers keep the FTS table synchronized
-- document ingestion produces deterministic chunk boundaries
+Important behavior:
+- chunking is deterministic
+- FTS index is kept synchronized with triggers
+- retrieval is local and explainable
 
----
+## 8. API surface
 
-## 8. Live Chat Behavior
+### System
+- `GET /health`
+- `WebSocket /ws/live`
 
-### 8.1 Typed Chat
-Current behavior:
-- user sends typed message over websocket
-- backend calls local grounding over study sources
-- backend builds grounded prompt
-- Ollama receives the grounded prompt
-- assistant response streams back
-- `turn_complete` includes `source_info`
-- raw typed input is what gets saved to Study Vault
+### Sessions
+- `GET /api/sessions`
+- `GET /api/sessions/{session_id}`
 
-Current source attribution:
-- `source_info.matched`
-- `source_info.match_count`
-- `source_info.source_titles`
+### Study sources
+- `GET /api/study-sources`
+- `GET /api/study-sources/{document_id}`
+- `GET /api/study-sources/search?q=...`
+- `POST /api/study-sources`
+- `POST /api/study-sources/upload`
 
-### 8.2 Voice Chat
-Current behavior:
-- frontend starts audio lifecycle
-- backend buffers audio
-- faster-whisper produces transcript
-- transcript is sent back to frontend
-- backend grounds the transcript using the same study-source retrieval path
-- Ollama receives the grounded voice prompt
-- assistant response streams back
-- `turn_complete` includes `source_info`
-- raw spoken transcript is what gets persisted
+### Vision
+- `POST /api/vision`
+- `POST /api/vision/warm`
 
-Important:
-- voice grounding is now implemented
-- source hints now work for voice replies too
+## 9. Important behavior contracts
 
-### 8.3 Vision Chat
-Current behavior:
-- vision exists and is functionally good enough for now
-- smaller snapshot capture path exists
-- keep-alive behavior exists for vision requests
-- warm-up endpoint exists
-- one retry on empty response exists
-- frontend shows backend vision error detail
+### 9.1 Grounding contract
+- typed chat can be grounded with local Study Sources
+- voice chat can be grounded with local Study Sources
+- source hints are lightweight and turn-scoped
+- the system must not claim study-source support for text not present in retrieved chunks
 
----
+### 9.2 Persistence contract
+- the raw user message or transcript is what gets stored visibly
+- internal grounded prompt text is not stored as the visible user message
 
-## 9. Study Source Grounding Model
+### 9.3 UI state contract
+- new chat should reset the live workspace
+- newly created sources should appear in the sidebar
+- stale source detail should not remain visible after failed source loads
+- camera preview should render before capture
 
-Grounding currently uses:
-- local SQLite FTS retrieval
+## 10. Quality baseline
 
-Grounding result structure conceptually includes:
-- grounded prompt
-- list of matched study chunks
+Latest confirmed status:
+- backend tests passing: `77`
+- frontend tests passing: `46`
+- frontend production build: passing
+- manual end-to-end verification completed for the main MVP flows
 
-Source attribution is derived from those matches:
-- whether any chunk matched
-- how many chunks matched
-- distinct source titles involved
+## 11. Known limits
 
-No-match design rule:
-- if no relevant match exists, the model should not implicitly rely on prior study-note context from earlier turns
-- no-match behavior is scoped to the current turn
+Current limits include:
+- no auth or account system
+- no hosted production deployment workflow
+- no advanced retrieval ranking beyond local FTS matching
+- no collaborative features
+- no long-term analytics or telemetry stack
 
-This prevents unwanted study-note bleed between unrelated questions.
+## 12. Completion state
 
----
-
-## 10. Current REST API Surface
-
-### 10.1 Create study source from text
-`POST /api/study-sources`
-
-Purpose:
-- create a study source from provided title, source type, and content
-
-Used by:
-- pasted text create flow
-- edited imported file fallback flow
-
-### 10.2 Upload study source file
-`POST /api/study-sources/upload`
-
-Purpose:
-- upload `.txt` or `.md` file
-- ingest it as `local_file`
-
-Behavior:
-- only `.txt` and `.md` accepted
-- empty file rejected
-- filename can be used to derive title
-- file must decode as UTF-8 text
-
-### 10.3 List study sources
-`GET /api/study-sources`
-
-Purpose:
-- return saved sources for the Study Sources panel
-
-### 10.4 Search study chunks
-`GET /api/study-sources/search?q=...`
-
-Purpose:
-- query study chunks by text
-- power Study Sources search UI
-- support grounding internals through related retrieval helpers
-
-### 10.5 Get study source detail
-`GET /api/study-sources/{document_id}`
-
-Purpose:
-- return full source detail with content and chunks
-
----
-
-## 11. Current Frontend Search UX
-
-Study Sources search currently supports:
-- manual search query input
-- loading search results from backend
-- empty search state
-- error search state
-- clickable result items
-- opening full source detail from a result
-
-Current result display includes:
-- source title
-- chunk number
-- content preview snippet
-
----
-
-## 12. Current Source Types
-
-Known current source types in product behavior:
-
-- `pasted_text`
-- `local_file`
-
-Meaning:
-- `pasted_text`: user manually pasted the content into the form
-- `local_file`: content originated from local file import or upload
-
----
-
-## 13. Current Reliability and Testing State
-
-Latest known green baseline after recent work:
-
-### Backend
-- full backend suite passing
-- total: 77 tests
-
-Coverage areas include:
-- study-source DB behavior
-- study-source chunking and ingestion service
-- study-source REST API
-- chat grounding behavior
-- websocket typed flow
-- websocket voice flow
-- source attribution behavior
-- upload endpoint behavior
-
-### Frontend
-- full frontend suite passing
-- total: 37 tests
-
-Coverage areas include:
-- socket state
-- session state
-- Study Vault UI
-- Live session/source hint UI
-- Study Sources create/import/search/detail flows
-
----
-
-## 14. Mental Model Summary
-
-WhisperLens is now best understood as this:
-
-A local study assistant where:
-- the user can talk or type
-- the app can remember conversations locally
-- the user can build a local study-source vault
-- the assistant can pull relevant note context from that vault
-- the user gets lightweight visibility that a source was used
-- everything stays intentionally simple, local-first, and free
-
-That simplicity is part of the product quality, not a missing feature.
+WhisperLens should be considered a finished MVP baseline when these remain true:
+- green backend tests
+- green frontend tests
+- passing frontend production build
+- stable manual demo flow
+- documentation consistent with the actual product

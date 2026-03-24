@@ -1,137 +1,112 @@
 # WhisperLens
 
-WhisperLens is a local-first AI study assistant built for real-time text, voice, and vision study workflows.
+WhisperLens is a local-first AI study assistant for text, voice, and snapshot-based vision workflows.
 
-## What WhisperLens does
+It is built to feel like a real product while staying simple, explainable, and inexpensive to run:
+- local FastAPI backend
+- local Next.js frontend
+- local Ollama text and vision models
+- local faster-whisper speech-to-text
+- local SQLite persistence and retrieval
+- no paid API required in the normal runtime path
+
+## What the product does
 
 WhisperLens helps a student:
-- ask questions by text
+- chat by text in a live workspace
 - ask questions by voice
-- use snapshot-based vision
-- save conversations locally
-- add local study materials
-- search those study materials
-- ground assistant responses with local study-source context
-- see lightweight source hints under grounded replies
+- use a camera snapshot for quick visual questions
+- save sessions locally in Study Vault
+- create local study sources from pasted text or local `.txt` / `.md` files
+- search those study sources with local retrieval
+- show lightweight source hints under grounded assistant replies
+- reopen saved sessions and inspect saved sources from the sidebar
 
-## Current MVP status
+## Current product surfaces
 
-The current system supports:
+The merged MVP has five user-facing surfaces:
+1. Live workspace
+2. Study Vault sidebar list
+3. Session detail view
+4. Study Sources sidebar list
+5. Source detail / create source view
 
-### Live chat
-- typed chat over WebSockets
-- voice chat over WebSockets
-- local speech-to-text with `faster-whisper`
-- local LLM responses through Ollama
-- session continuity across turns
+## Verified project status
 
-### Grounding
-- typed chat grounded with local Study Sources
-- voice chat grounded with local Study Sources
-- local retrieval using SQLite FTS
-- lightweight source hints shown under grounded assistant replies
+Latest confirmed baseline:
+- backend tests: `77 passed`
+- frontend tests: `46 passed`
+- frontend production build: passing
+- manual end-to-end flow: verified for typed chat, new chat reset, source creation, source search, voice, and camera preview/capture
+
+This is a strong MVP and demo-ready baseline.
+
+## Main features
+
+### Live workspace
+- WebSocket-based typed chat
+- voice input and transcription
+- snapshot-based vision flow
+- fixed composer with scrollable conversation area
+- grounded source hints under supported assistant replies
+
+### Study Vault
+- saved sessions listed in the sidebar
+- session detail view for reopening prior conversations
+- local persistence of text, voice, and vision turns
 
 ### Study Sources
 - create sources from pasted text
-- import local `.txt` files
-- import local `.md` files
-- search study-source chunks
-- open full source detail
-- show chunk counts and full content
-- imported files saved as `local_file`
-- pasted manual text saved as `pasted_text`
+- import `.txt` and `.md` files
+- deterministic chunking on ingest
+- SQLite FTS search over stored chunks
+- source detail view with full content and chunk list
+- immediate sidebar refresh after new source creation
 
-### Study Vault
-- local persistence of saved sessions
-- text, voice, and vision turns stored locally
-- Study Vault refresh support for saved turns
-
-### Vision
-- local snapshot-based vision through Ollama
-- currently functional enough for the MVP
-- intentionally not the current roadmap focus
-
-## Product principles
-
-WhisperLens is intentionally built around these rules:
-
-1. local-first comes first
-2. no paid API usage
-3. no required cloud inference dependency in the main runtime path
-4. preserve working features while extending carefully
-5. keep retrieval simple and explainable
-6. prefer moderate safe slices over giant refactors
-7. keep tests green before moving forward
+### Grounding
+- typed chat grounded with local study sources
+- voice chat grounded with local study sources
+- lightweight attribution metadata returned at turn completion
 
 ## Tech stack
 
 ### Frontend
-- Next.js
-- React
+- Next.js 16
+- React 19
 - TypeScript
+- Vitest + Testing Library
 
 ### Backend
 - FastAPI
 - Python
+- aiosqlite
+- pytest
 
-### Runtime and AI
-- Ollama for local model inference
-- faster-whisper for local speech-to-text
+### Local AI runtime
+- Ollama
+- faster-whisper
 
-### Persistence
+### Storage and retrieval
 - SQLite
-
-### Retrieval
-- SQLite FTS5 over deterministic study-source chunks
+- FTS5
 
 ## Repository structure
 
 ```text
 apps/
-  backend/   FastAPI backend, websocket orchestration, persistence, retrieval
-  web/       Next.js frontend UI
+  backend/   FastAPI backend, WebSocket orchestration, persistence, retrieval
+  web/       Next.js UI
+
 docs/
-  spec.md    Internal architecture and product spec
+  setup.md                     local setup and troubleshooting
+  spec.md                      product and technical spec
+  architecture/overview.md     architecture guide
+  demo/manual-e2e-checklist.md demo and manual verification checklist
 ```
 
-## Architecture overview
+## Quick start
 
-WhisperLens has four main product surfaces:
-
-1. Live chat
-2. Study Sources
-3. Study Vault
-4. Backend status
-
-At a high level:
-
-- the frontend talks to the backend
-- the backend owns websocket orchestration, persistence, study-source ingestion, and retrieval
-- Ollama handles local text and vision model inference
-- faster-whisper handles local speech-to-text
-- SQLite stores sessions, messages, study documents, and study chunks
-
-For the detailed internal architecture, read:
-
-`docs/spec.md`
-
-## Local setup
-
-### Requirements
-- Python 3.13 recommended for the backend
-- Node.js for the frontend
-- Ollama installed and running locally
-
-### Default backend settings
-The backend defaults currently include:
-- Ollama base URL: `http://localhost:11434`
-- text model: `llama3.2`
-- vision model: `moondream`
-- STT model: `base`
-
-These are loaded through the backend settings layer.
-
-## Backend setup
+### 1. Start the backend
 
 ```bash
 cd apps/backend
@@ -141,15 +116,13 @@ pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-Backend will run on:
+Backend default URL:
 
-`http://localhost:8000`
+```text
+http://localhost:8000
+```
 
-Health check:
-
-`GET /health`
-
-## Frontend setup
+### 2. Start the frontend
 
 ```bash
 cd apps/web
@@ -157,13 +130,44 @@ npm install
 npm run dev
 ```
 
-Frontend will run on:
+Frontend default URL:
 
-`http://localhost:3000`
+```text
+http://localhost:3000
+```
 
-## Running tests
+### 3. Start Ollama and pull the models
+
+```bash
+ollama pull llama3.2
+ollama pull moondream
+```
+
+## Environment files
+
+### Backend example
+Path: `apps/backend/.env`
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2
+OLLAMA_VISION_MODEL=moondream
+STT_MODEL=base
+DB_PATH=whisperlens.db
+```
+
+### Frontend example
+Path: `apps/web/.env.local`
+
+```env
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+NEXT_PUBLIC_BACKEND_WS_URL=ws://localhost:8000/ws/live
+```
+
+## Testing
 
 ### Backend
+
 ```bash
 cd apps/backend
 source .venv/bin/activate
@@ -171,70 +175,64 @@ pytest -q
 ```
 
 ### Frontend
+
 ```bash
 cd apps/web
 npm test
+npm run build
 ```
 
-## Current tested baseline
-
-Latest confirmed green baseline in development:
-
-### Backend
-- full backend suite passing
-- 77 tests
-
-### Frontend
-- full frontend suite passing
-- 37 tests
-
-## Current API surface
-
-### Study Vault
-- `GET /api/sessions`
-- `GET /api/sessions/{session_id}`
-
-### Study Sources
-- `POST /api/study-sources`
-- `POST /api/study-sources/upload`
-- `GET /api/study-sources`
-- `GET /api/study-sources/search?q=...`
-- `GET /api/study-sources/{document_id}`
-
-### Vision
-- `POST /api/vision`
+## Main API surface
 
 ### System
 - `GET /health`
 - `WebSocket /ws/live`
 
-## Important behavior contracts
+### Sessions
+- `GET /api/sessions`
+- `GET /api/sessions/{session_id}`
 
-### Grounding
-- typed chat is grounded with local Study Sources
-- voice chat is grounded with local Study Sources
-- retrieval uses SQLite FTS
+### Study Sources
+- `GET /api/study-sources`
+- `GET /api/study-sources/{document_id}`
+- `GET /api/study-sources/search?q=...`
+- `POST /api/study-sources`
+- `POST /api/study-sources/upload`
 
-### Persistence
-- raw user input is preserved in Study Vault
-- internal grounded prompts are not stored as the visible user message
+### Vision
+- `POST /api/vision`
+- `POST /api/vision/warm`
 
-### Source hints
-- assistant replies can include lightweight source attribution
-- source hints appear only when a match exists
-- no hint appears when no source matched
+## Demo flow
 
-## Near-term roadmap direction
+A clean MVP demo sequence:
+1. open the live workspace
+2. send a typed question
+3. start a new chat and show reset behavior
+4. create a new study source
+5. open the source detail view and search inside it
+6. ask a grounded question
+7. use voice input
+8. use the camera snapshot flow
+9. open Study Vault and show saved history
 
-- setup polish
-- Study Sources search/result polish
-- MVP finishing-line refinement
-- later source-display improvements
-- later local eval groundwork
+## Important product rules
 
-## Why this project matters
+- keep the runtime local-first
+- keep retrieval simple and explainable
+- preserve raw user input in saved history
+- do not store internal grounded prompt text as the visible user message
+- prefer safe, tested slices over large speculative rewrites
 
-WhisperLens is trying to be something sharper:
-a clean, local-first study assistant with real engineering discipline, practical product decisions, and an architecture that is easy to understand and extend.
+## Known limits
 
-That simplicity is part of the quality.
+- this is an MVP, not a production SaaS system
+- retrieval is intentionally lightweight and local
+- there is no multi-user auth or hosted deployment story in the current baseline
+
+## Documentation map
+
+- local setup: `docs/setup.md`
+- product and engineering spec: `docs/spec.md`
+- architecture overview: `docs/architecture/overview.md`
+- manual E2E test checklist: `docs/demo/manual-e2e-checklist.md`
