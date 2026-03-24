@@ -6,7 +6,6 @@ import LiveSessionPanel from "./LiveSessionPanel";
  * Stub out modules that need browser APIs unavailable in jsdom
  * ----------------------------------------------------------------*/
 
-// Capture the onMessage callback so we can simulate server messages
 let capturedOnMessage: ((msg: Record<string, unknown>) => void) | null = null;
 let capturedOnStatusChange: ((status: string) => void) | null = null;
 
@@ -58,7 +57,6 @@ afterEach(() => {
 
 function renderAndConnect() {
     render(<LiveSessionPanel />);
-    // Simulate socket becoming connected
     act(() => {
         capturedOnStatusChange?.("CONNECTED");
     });
@@ -89,22 +87,18 @@ describe("LiveSessionPanel message handling", () => {
     it("moves completed response to chat history on turn_complete", () => {
         renderAndConnect();
 
-        // Stream a chunk
         act(() => {
             capturedOnMessage?.({ type: "transcript", text: "Hello world!" });
         });
 
-        // Complete the turn
         act(() => {
             capturedOnMessage?.({ type: "turn_complete", text: "Hello world!" });
         });
 
-        // Streaming indicator should be gone
         expect(screen.queryByTestId("streaming-text")).toBeNull();
 
-        // Chat log should show the completed response
         const chatLog = screen.getByTestId("chat-log");
-        expect(chatLog.textContent).toContain("AI:");
+        expect(chatLog.textContent).toContain("WhisperLens");
         expect(chatLog.textContent).toContain("Hello world!");
     });
 
@@ -115,8 +109,8 @@ describe("LiveSessionPanel message handling", () => {
             capturedOnMessage?.({ type: "error", message: "Model not found" });
         });
 
-        // Error should be visible in the state label
-        expect(screen.getByText(/ERROR.*Model not found/)).toBeTruthy();
+        const errorEl = screen.getByTestId("error-message");
+        expect(errorEl.textContent).toContain("Model not found");
     });
 
     it("sends text input over the websocket", () => {
@@ -129,13 +123,10 @@ describe("LiveSessionPanel message handling", () => {
         fireEvent.click(sendBtn);
 
         expect(mockSendTextMessage).toHaveBeenCalledWith("hello");
-
-        // Input should be cleared after send
         expect(input.value).toBe("");
 
-        // User message should appear in chat
         const chatLog = screen.getByTestId("chat-log");
-        expect(chatLog.textContent).toContain("You:");
+        expect(chatLog.textContent).toContain("You");
         expect(chatLog.textContent).toContain("hello");
     });
 
@@ -147,21 +138,19 @@ describe("LiveSessionPanel message handling", () => {
         });
 
         const chatLog = screen.getByTestId("chat-log");
-        expect(chatLog.textContent).toContain("You:");
+        expect(chatLog.textContent).toContain("You");
         expect(chatLog.textContent).toContain("hello from voice");
     });
 
     it("sends session_bind on connect when sessionId exists", () => {
         renderAndConnect();
 
-        // Simulate receiving session_created from a prior turn
         act(() => {
             capturedOnMessage?.({ type: "session_created", session_id: "existing-abc" });
         });
 
         mockSendControlMessage.mockClear();
 
-        // Simulate a reconnect — status goes to CONNECTED again
         act(() => {
             capturedOnStatusChange?.("CONNECTED");
         });
@@ -173,7 +162,6 @@ describe("LiveSessionPanel message handling", () => {
     });
 
     it("sends session_bind after vision response while ws connected", async () => {
-        // Mock getUserMedia so camera can be granted
         const fakeStream = { getTracks: () => [] };
         Object.defineProperty(navigator, "mediaDevices", {
             value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
@@ -182,13 +170,11 @@ describe("LiveSessionPanel message handling", () => {
 
         renderAndConnect();
 
-        // Grant camera permission
-        const cameraBtn = screen.getByText("Enable Camera");
+        const cameraBtn = screen.getByTestId("camera-toggle");
         await act(async () => {
             fireEvent.click(cameraBtn);
         });
 
-        // Mock canvas so captureSnapshot works
         const mockCtx = { drawImage: vi.fn() };
         vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
             mockCtx as unknown as CanvasRenderingContext2D
@@ -197,18 +183,15 @@ describe("LiveSessionPanel message handling", () => {
             "data:image/jpeg;base64,AAAA"
         );
 
-        // Set videoRef dimensions so captureSnapshot proceeds
         const video = document.querySelector("video");
         if (video) {
             Object.defineProperty(video, "videoWidth", { value: 640 });
             Object.defineProperty(video, "videoHeight", { value: 480 });
         }
 
-        // Click Capture to set snapshotData
         const captureBtn = screen.getByTestId("capture-button");
         fireEvent.click(captureBtn);
 
-        // Mock fetch for vision endpoint
         vi.stubGlobal(
             "fetch",
             vi.fn().mockResolvedValue({
@@ -219,7 +202,6 @@ describe("LiveSessionPanel message handling", () => {
 
         mockSendControlMessage.mockClear();
 
-        // Click Send (with snapshot attached, no text → sends vision)
         const sendBtn = screen.getByTestId("send-button");
         await act(async () => {
             fireEvent.click(sendBtn);
@@ -236,13 +218,11 @@ describe("LiveSessionPanel message handling", () => {
         render(<LiveSessionPanel onTurnSaved={onTurnSaved} />);
         act(() => { capturedOnStatusChange?.("CONNECTED"); });
 
-        // turn_complete updates chat UI but does NOT call onTurnSaved
         act(() => {
             capturedOnMessage?.({ type: "turn_complete", text: "Done!" });
         });
         expect(onTurnSaved).not.toHaveBeenCalled();
 
-        // turn_saved fires the callback
         act(() => {
             capturedOnMessage?.({ type: "turn_saved" });
         });
@@ -250,7 +230,6 @@ describe("LiveSessionPanel message handling", () => {
     });
 
     it("surfaces backend detail on vision error response", async () => {
-        // Mock getUserMedia so camera can be granted
         const fakeStream = { getTracks: () => [] };
         Object.defineProperty(navigator, "mediaDevices", {
             value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
@@ -259,12 +238,10 @@ describe("LiveSessionPanel message handling", () => {
 
         renderAndConnect();
 
-        // Grant camera
         await act(async () => {
-            fireEvent.click(screen.getByText("Enable Camera"));
+            fireEvent.click(screen.getByTestId("camera-toggle"));
         });
 
-        // Mock canvas
         vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
             { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
         );
@@ -277,10 +254,8 @@ describe("LiveSessionPanel message handling", () => {
             Object.defineProperty(video, "videoHeight", { value: 480 });
         }
 
-        // Capture snapshot
         fireEvent.click(screen.getByTestId("capture-button"));
 
-        // Mock 502 with JSON detail
         vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
             ok: false,
             status: 502,
@@ -291,14 +266,12 @@ describe("LiveSessionPanel message handling", () => {
             fireEvent.click(screen.getByTestId("send-button"));
         });
 
-        // The real detail should be shown, not just "HTTP 502"
         const errorEl = screen.getByTestId("error-message");
         expect(errorEl.textContent).toContain("timed out");
         expect(errorEl.textContent).not.toContain("HTTP 502");
     });
 
     it("clears stale error after successful vision response", async () => {
-        // Mock getUserMedia
         const fakeStream = { getTracks: () => [] };
         Object.defineProperty(navigator, "mediaDevices", {
             value: { getUserMedia: vi.fn().mockResolvedValue(fakeStream) },
@@ -307,19 +280,16 @@ describe("LiveSessionPanel message handling", () => {
 
         renderAndConnect();
 
-        // Grant camera (ignore warm-up fetch)
         vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
         await act(async () => {
-            fireEvent.click(screen.getByText("Enable Camera"));
+            fireEvent.click(screen.getByTestId("camera-toggle"));
         });
 
-        // Inject a stale error from a prior action
         act(() => {
             capturedOnMessage?.({ type: "error", message: "No audio data received" });
         });
         expect(screen.getByTestId("error-message")).toBeTruthy();
 
-        // Mock canvas
         vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
             { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
         );
@@ -332,10 +302,8 @@ describe("LiveSessionPanel message handling", () => {
             Object.defineProperty(video, "videoHeight", { value: 480 });
         }
 
-        // Capture snapshot
         fireEvent.click(screen.getByTestId("capture-button"));
 
-        // Mock successful vision response
         vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
             ok: true,
             json: async () => ({ answer: "A cat.", session_id: "s1" }),
@@ -345,7 +313,6 @@ describe("LiveSessionPanel message handling", () => {
             fireEvent.click(screen.getByTestId("send-button"));
         });
 
-        // Error should be cleared
         expect(screen.queryByTestId("error-message")).toBeNull();
     });
 
@@ -365,7 +332,6 @@ describe("LiveSessionPanel message handling", () => {
         });
 
         const chatLog = screen.getByTestId("chat-log");
-
         expect(chatLog.textContent).toContain("A process is a program in execution.");
         expect(chatLog.textContent).toContain(
             "Used 2 study chunks from Operating Systems Notes"
@@ -379,16 +345,11 @@ describe("LiveSessionPanel message handling", () => {
             capturedOnMessage?.({
                 type: "turn_complete",
                 text: "I could not find a relevant match in your study sources.",
-                source_info: {
-                    matched: false,
-                    match_count: 0,
-                    source_titles: [],
-                },
+                source_info: { matched: false, match_count: 0, source_titles: [] },
             });
         });
 
         const chatLog = screen.getByTestId("chat-log");
-
         expect(chatLog.textContent).toContain(
             "I could not find a relevant match in your study sources."
         );
@@ -412,7 +373,6 @@ describe("LiveSessionPanel message handling", () => {
         });
 
         const chatLog = screen.getByTestId("chat-log");
-
         expect(chatLog.textContent).toContain(
             "Processes and threads are related but not the same."
         );
@@ -432,7 +392,6 @@ describe("LiveSessionPanel message handling", () => {
         });
 
         const chatLog = screen.getByTestId("chat-log");
-
         expect(chatLog.textContent).toContain(
             "Here is a normal assistant reply without grounding metadata."
         );
