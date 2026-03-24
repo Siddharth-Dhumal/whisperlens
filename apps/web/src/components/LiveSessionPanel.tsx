@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createAudioRecorder, type AudioRecorder } from "@/lib/audioRecorder";
+import Image from "next/image";
 import {
   createLiveSocketClient,
   type LiveSocketClient,
@@ -54,11 +55,10 @@ function buildSourceHint(sourceInfo?: SourceInfo): string | null {
 export default function LiveSessionPanel({ onTurnSaved }: Props) {
   const [model, setModel] = useState<SessionModel>(createInitialSessionModel());
   const [isRecording, setIsRecording] = useState(false);
-  const [totalBytes, setTotalBytes] = useState(0);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [socketStatus, setSocketStatus] =
     useState<LiveSocketStatus>("DISCONNECTED");
 
-  // Chat state
   const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
   const [streamingText, setStreamingText] = useState("");
   const [textInput, setTextInput] = useState("");
@@ -77,11 +77,45 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const onTurnSavedRef = useRef(onTurnSaved);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   onTurnSavedRef.current = onTurnSaved;
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [chatHistory, streamingText]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [textInput]);
+
+  useEffect(() => {
+    if (!isCameraOpen) {
+      return;
+    }
+
+    const video = videoRef.current;
+    const stream = cameraStreamRef.current;
+
+    if (!video || !stream) {
+      return;
+    }
+
+    video.srcObject = stream;
+
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Ignore autoplay/play race issues
+      });
+    }
+  }, [isCameraOpen]);
 
   useEffect(() => {
     const socketUrl =
@@ -115,10 +149,7 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         } else if (message.type === "turn_saved") {
           onTurnSavedRef.current?.();
         } else if (message.type === "stt_result") {
-          setChatHistory((prev) => [
-            ...prev,
-            { role: "user", text: message.text },
-          ]);
+          setChatHistory((prev) => [...prev, { role: "user", text: message.text }]);
         } else if (message.type === "session_created") {
           setSessionId(message.session_id);
           sessionIdRef.current = message.session_id;
@@ -130,11 +161,13 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
           }));
           setStreamingText("");
           setIsSending(false);
+          setIsRecording(false);
         }
       },
       onError: (message) => {
         setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
         setIsSending(false);
+        setIsRecording(false);
       },
     });
 
@@ -146,13 +179,16 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     };
   }, []);
 
-  async function requestMicrophone() {
+  async function requestMicrophone(): Promise<boolean> {
+    if (micStreamRef.current && recorderRef.current) {
+      return true;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
 
       recorderRef.current = createAudioRecorder(stream, (chunk) => {
-        setTotalBytes((previousBytes) => previousBytes + chunk.byteLength);
         socketRef.current?.sendAudioChunk(chunk);
       });
 
@@ -160,21 +196,29 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
         const next = { ...prev, micGranted: true, error: undefined };
         return { ...next, state: computeNextState(next) };
       });
+
+      return true;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Mic permission failed";
       setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+      return false;
     }
   }
 
-  async function requestCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      cameraStreamRef.current = stream;
+  async function requestCamera(): Promise<boolean> {
+    if (cameraStreamRef.current) {
+      return true;
+    }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+        },
+      });
+
+      cameraStreamRef.current = stream;
 
       setModel((prev) => {
         const next = { ...prev, cameraGranted: true, error: undefined };
@@ -182,10 +226,12 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
       });
 
       fetch(`${backendUrl}/api/vision/warm`, { method: "POST" }).catch(() => { });
+      return true;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Camera permission failed";
       setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+      return false;
     }
   }
 
@@ -205,7 +251,7 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     }
 
     setIsRecording(false);
-    setTotalBytes(0);
+    setIsCameraOpen(false);
     setSocketStatus("DISCONNECTED");
     setChatHistory([]);
     setStreamingText("");
@@ -217,33 +263,44 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     sessionIdRef.current = null;
   }
 
-  function connectSocket() {
+  function handleSocketToggle() {
+    if (socketStatus === "CONNECTED" || socketStatus === "CONNECTING") {
+      recorderRef.current?.stop();
+      setIsRecording(false);
+      setIsSending(false);
+      socketRef.current?.disconnect();
+      setSocketStatus("DISCONNECTED");
+      return;
+    }
+
     socketRef.current?.connect();
   }
 
-  function disconnectSocket() {
-    socketRef.current?.disconnect();
-  }
-
-  async function startRecording() {
+  async function startRecording(): Promise<boolean> {
     if (!recorderRef.current) {
-      return;
+      return false;
     }
 
     try {
       await recorderRef.current.start();
       socketRef.current?.sendControlMessage({ type: "audio_start" });
       setIsRecording(true);
-      setModel((prev) => ({ ...prev, state: "RECORDING" }));
+      setModel((prev) => ({ ...prev, error: undefined, state: "RECORDING" }));
+      return true;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Recording failed to start";
       setIsRecording(false);
       setModel((prev) => ({ ...prev, error: { message }, state: "ERROR" }));
+      return false;
     }
   }
 
   function stopRecording() {
+    if (!isRecording) {
+      return;
+    }
+
     recorderRef.current?.stop();
     setIsRecording(false);
     setIsSending(true);
@@ -256,13 +313,55 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     });
   }
 
+  async function handleVoiceToggle() {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    if (socketStatus !== "CONNECTED" || isSending) {
+      return;
+    }
+
+    const ready = await requestMicrophone();
+    if (!ready) {
+      return;
+    }
+
+    await startRecording();
+  }
+
+  async function handleCameraToggle() {
+    if (isCameraOpen) {
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setIsCameraOpen(false);
+      return;
+    }
+
+    const ready = await requestCamera();
+    if (!ready) {
+      return;
+    }
+
+    setIsCameraOpen(true);
+  }
+
   function captureSnapshot() {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      return;
+    }
 
     const MAX_WIDTH = 1024;
     let w = video.videoWidth;
     let h = video.videoHeight;
+
+    if (!w || !h) {
+      return;
+    }
+
     if (w > MAX_WIDTH) {
       h = Math.round(h * (MAX_WIDTH / w));
       w = MAX_WIDTH;
@@ -272,20 +371,29 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      return;
+    }
+
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
     setSnapshotData(dataUrl.split(",")[1]);
+    setIsCameraOpen(false);
   }
 
   async function handleSendVision(question: string) {
+    if (!snapshotData) {
+      return;
+    }
+
     setIsSending(true);
     setModel((prev) => ({
       ...prev,
       error: undefined,
       state: computeNextState({ ...prev, error: undefined }),
     }));
-    const userText = question || "📷 Snapshot";
+
+    const userText = question || "Snapshot";
     setChatHistory((prev) => [...prev, { role: "user", text: `📷 ${userText}` }]);
     setSnapshotData(null);
     setTextInput("");
@@ -300,29 +408,39 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
           session_id: sessionId ?? undefined,
         }),
       });
+
       if (!res.ok) {
         let detail = `HTTP ${res.status}`;
         try {
           const body = await res.json();
-          if (body.detail) detail = body.detail;
+          if (body.detail) {
+            detail = body.detail;
+          }
         } catch { }
         throw new Error(detail);
       }
+
       const data = await res.json();
+
       setChatHistory((prev) => [...prev, { role: "assistant", text: data.answer }]);
       setModel((prev) => ({
         ...prev,
         error: undefined,
         state: computeNextState({ ...prev, error: undefined }),
       }));
+
       onTurnSavedRef.current?.();
+
       if (data.session_id) {
         setSessionId(data.session_id);
         sessionIdRef.current = data.session_id;
-        socketRef.current?.sendControlMessage({
-          type: "session_bind",
-          session_id: data.session_id,
-        });
+
+        if (socketStatus === "CONNECTED") {
+          socketRef.current?.sendControlMessage({
+            type: "session_bind",
+            session_id: data.session_id,
+          });
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Vision request failed";
@@ -334,210 +452,243 @@ export default function LiveSessionPanel({ onTurnSaved }: Props) {
 
   function handleSendText() {
     const trimmed = textInput.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
 
     if (snapshotData) {
       handleSendVision(trimmed);
       return;
     }
 
-    if (socketStatus !== "CONNECTED") return;
+    if (socketStatus !== "CONNECTED") {
+      return;
+    }
+
     setChatHistory((prev) => [...prev, { role: "user", text: trimmed }]);
     socketRef.current?.sendTextMessage(trimmed);
     setTextInput("");
     setIsSending(true);
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+
+      if (snapshotData && !textInput.trim()) {
+        handleSendVision("");
+        return;
+      }
+
       handleSendText();
     }
   }
 
-  const capturedKilobytes = (totalBytes / 1024).toFixed(1);
+  const hasConversation = chatHistory.length > 0 || Boolean(streamingText);
+  const socketConnected = socketStatus === "CONNECTED";
+  const canSend =
+    snapshotData !== null
+      ? !isSending
+      : socketConnected && Boolean(textInput.trim()) && !isSending;
 
   return (
-    <div className="rounded-xl border p-4">
-      <div className="text-sm font-semibold">Live Session</div>
+    <section className="wl-live-shell">
+      {/* ── Top nav bar ── */}
+      <div className="wl-live-topbar">
+        <div className="wl-live-topbar-left" />
 
-      <div className="mt-2 text-sm">
-        <span className="font-medium">State:</span>{" "}
-        {model.error ? (
-          <span data-testid="error-message">ERROR: {model.error.message}</span>
-        ) : (
-          model.state
-        )}
-      </div>
-
-      <div className="mt-1 text-sm">
-        <span className="font-medium">Socket:</span> {socketStatus}
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
         <button
-          className="rounded-lg border px-3 py-2 text-sm"
-          onClick={requestMicrophone}
-          disabled={model.micGranted}
+          type="button"
+          className={`wl-live-nav-socket ${socketConnected ? "wl-live-nav-socket-connected" : ""}`}
+          onClick={handleSocketToggle}
+          aria-pressed={socketConnected}
+          data-testid="socket-toggle"
+          title={socketConnected ? "Disconnect" : "Connect"}
         >
-          {model.micGranted ? "Mic Granted" : "Enable Microphone"}
+          <span className="wl-live-nav-socket-dot" />
+          {socketConnected ? "Connected" : "Connect"}
         </button>
 
         <button
-          className="rounded-lg border px-3 py-2 text-sm"
-          onClick={requestCamera}
-          disabled={model.cameraGranted}
-        >
-          {model.cameraGranted ? "Camera Granted" : "Enable Camera"}
-        </button>
-
-        <button
-          className="rounded-lg border px-3 py-2 text-sm"
-          onClick={connectSocket}
-        >
-          Connect Socket
-        </button>
-
-        <button
-          className="rounded-lg border px-3 py-2 text-sm"
-          onClick={disconnectSocket}
-        >
-          Disconnect Socket
-        </button>
-
-        <button
-          className="rounded-lg border px-3 py-2 text-sm"
+          type="button"
+          className="wl-live-reset"
           onClick={stopAllStreams}
+          title="Reset session"
         >
           Reset
         </button>
       </div>
 
-      <div className="mt-4">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="aspect-video w-full rounded-lg border"
-        />
-        <div className="mt-2 flex items-center gap-2">
-          <span className="text-xs text-gray-500">Camera preview (local).</span>
-          <button
-            className="rounded border px-2 py-1 text-xs disabled:opacity-50"
-            onClick={captureSnapshot}
-            disabled={!model.cameraGranted}
-            data-testid="capture-button"
-          >
-            📷 Capture
-          </button>
-        </div>
-
-        {snapshotData && (
-          <div className="mt-2 flex items-center gap-2" data-testid="snapshot-preview">
-            <img
-              src={`data:image/jpeg;base64,${snapshotData}`}
-              alt="Snapshot"
-              className="h-16 w-16 rounded border object-cover"
-            />
-            <span className="text-xs text-gray-600">Snapshot attached</span>
-            <button
-              className="text-xs text-red-500 hover:underline"
-              onClick={() => setSnapshotData(null)}
-              data-testid="clear-snapshot"
-            >
-              ✕ Clear
-            </button>
+      {/* ── Scrollable chat area ── */}
+      <div className="wl-live-thread-shell">
+        {model.error && (
+          <div className="wl-live-error" data-testid="error-message">
+            {model.error.message}
           </div>
         )}
-      </div>
 
-      <div className="mt-4">
-        <button
-          className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-          disabled={!model.micGranted || socketStatus !== "CONNECTED"}
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
-          onMouseLeave={stopRecording}
-          onTouchStart={startRecording}
-          onTouchEnd={stopRecording}
-        >
-          {isRecording ? "Recording..." : "Push to Talk"}
-        </button>
-
-        <div className="mt-2 text-xs text-gray-500">
-          Audio chunks are now sent to the backend websocket.
-        </div>
-        <div className="mt-1 text-xs text-gray-500">
-          Captured audio: {capturedKilobytes} KB
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <div className="text-sm font-semibold">Chat</div>
-        <div
-          data-testid="chat-log"
-          className="mt-2 max-h-60 overflow-y-auto rounded-lg border p-3 text-sm"
-        >
-          {chatHistory.length === 0 && !streamingText && (
-            <div className="text-gray-400">
-              No messages yet. Connect the socket and send a message below.
+        <div data-testid="chat-log" className="wl-live-log">
+          {!hasConversation && (
+            <div className="wl-live-empty-state">
+              <div className="wl-live-empty-brand">WhisperLens</div>
             </div>
           )}
-          {chatHistory.map((entry, i) => {
+
+          {chatHistory.map((entry, index) => {
             const sourceHint =
               entry.role === "assistant" ? buildSourceHint(entry.sourceInfo) : null;
 
             return (
               <div
-                key={i}
-                className={`mb-2 ${entry.role === "user" ? "text-blue-600" : "text-gray-800"}`}
+                key={index}
+                className={`wl-live-message ${entry.role === "user" ? "wl-live-message-user" : "wl-live-message-assistant"}`}
               >
-                <div>
-                  <span className="font-medium">
-                    {entry.role === "user" ? "You: " : "AI: "}
-                  </span>
-                  {entry.text}
+                <div className="wl-live-message-role">
+                  {entry.role === "user" ? "You" : "WhisperLens"}
                 </div>
+                <div className="wl-live-message-text">{entry.text}</div>
                 {sourceHint && (
-                  <div className="ml-8 mt-1 text-xs text-gray-500">
-                    {sourceHint}
-                  </div>
+                  <div className="wl-live-source-hint">{sourceHint}</div>
                 )}
               </div>
             );
           })}
+
           {streamingText && (
-            <div data-testid="streaming-text" className="mb-2 text-gray-800">
-              <span className="font-medium">AI: </span>
-              {streamingText}
-              <span className="animate-pulse">▊</span>
+            <div
+              data-testid="streaming-text"
+              className="wl-live-message wl-live-message-assistant"
+            >
+              <div className="wl-live-message-role">WhisperLens</div>
+              <div className="wl-live-message-text">
+                {streamingText}
+                <span className="wl-live-cursor">▊</span>
+              </div>
             </div>
           )}
+
           <div ref={chatEndRef} />
         </div>
       </div>
 
-      <div className="mt-3 flex gap-2">
-        <input
-          data-testid="text-input"
-          type="text"
-          className="flex-1 rounded-lg border px-3 py-2 text-sm"
-          placeholder="Type a message..."
-          value={textInput}
-          onChange={(e) => setTextInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={(!snapshotData && socketStatus !== "CONNECTED") || isSending}
-        />
-        <button
-          data-testid="send-button"
-          className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
-          onClick={snapshotData && !textInput.trim() ? () => handleSendVision("") : handleSendText}
-          disabled={(!snapshotData && (socketStatus !== "CONNECTED" || !textInput.trim())) || isSending}
-        >
-          {isSending ? "Sending..." : "Send"}
-        </button>
+      {/* ── Fixed composer dock ── */}
+      <div className="wl-live-composer-dock">
+        {isCameraOpen && (
+          <div className="wl-live-camera-tray">
+            <div className="wl-live-camera-frame">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="wl-live-video"
+              />
+            </div>
+
+            <div className="wl-live-camera-actions">
+              <button
+                className="wl-live-secondary-button"
+                onClick={captureSnapshot}
+                disabled={!model.cameraGranted}
+                data-testid="capture-button"
+              >
+                Capture
+              </button>
+              <button
+                className="wl-live-secondary-button"
+                onClick={() => {
+                  if (videoRef.current) {
+                    videoRef.current.srcObject = null;
+                  }
+                  setIsCameraOpen(false);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+        {snapshotData && (
+          <div className="wl-live-attachment" data-testid="snapshot-preview">
+            <Image
+              src={`data:image/jpeg;base64,${snapshotData}`}
+              alt="Snapshot"
+              className="wl-live-attachment-thumb"
+              width={320}
+              height={180}
+              unoptimized
+            />
+
+            <div className="wl-live-attachment-copy">
+              Snapshot attached
+            </div>
+
+            <button
+              className="wl-live-clear-button"
+              onClick={() => setSnapshotData(null)}
+              data-testid="clear-snapshot"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        <div className="wl-live-composer">
+          {/* Camera icon button */}
+          <button
+            type="button"
+            className={`wl-live-composer-icon-btn ${isCameraOpen ? "wl-live-composer-icon-btn-active" : ""}`}
+            onClick={handleCameraToggle}
+            aria-pressed={isCameraOpen}
+            data-testid="camera-toggle"
+            title="Camera"
+            disabled={isSending}
+          >
+            📷
+          </button>
+
+          <textarea
+            ref={textareaRef}
+            data-testid="text-input"
+            className="wl-live-textarea"
+            placeholder="Message WhisperLens"
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={(!snapshotData && socketStatus !== "CONNECTED") || isSending}
+            rows={1}
+          />
+
+          {/* Voice icon button */}
+          <button
+            type="button"
+            className={`wl-live-composer-icon-btn ${isRecording ? "wl-live-composer-icon-btn-active wl-live-composer-icon-btn-recording" : ""}`}
+            onClick={handleVoiceToggle}
+            aria-pressed={isRecording}
+            data-testid="voice-toggle"
+            title={isRecording ? "Stop recording" : "Voice input"}
+            disabled={socketStatus !== "CONNECTED" || isSending}
+          >
+            🎙
+          </button>
+
+          {/* Send button */}
+          <button
+            data-testid="send-button"
+            className="wl-live-send-button"
+            onClick={
+              snapshotData && !textInput.trim()
+                ? () => handleSendVision("")
+                : handleSendText
+            }
+            disabled={!canSend}
+            title="Send"
+          >
+            ↑
+          </button>
+        </div>
       </div>
-    </div>
+    </section >
   );
 }
